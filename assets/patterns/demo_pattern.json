@@ -1,0 +1,50 @@
+{
+  "name": "Demo Pattern",
+  "bpm": 120,
+  "sample_folder": "../samples",
+  "sample_slots": {
+    "0": "kick.wav",
+    "1": "snare.wav",
+    "2": "hat_closed.wav",
+    "3": "hat_open.wav"
+  },
+  "bars": [
+    {
+      "time_signature": {
+        "numerator": 4,
+        "denominator": 4
+      },
+      "tree": {
+        "split": 4,
+        "children": [
+          {
+            "sample_slot": 0,
+            "velocity": 1.0
+          },
+          {
+            "split": 3,
+            "children": [
+              { "sample_slot": 2, "velocity": 0.70 },
+              { "sample_slot": 2, "velocity": 0.55 },
+              { "sample_slot": 1, "velocity": 0.90 }
+            ]
+          },
+          {
+            "split": 5,
+            "children": [
+              { "sample_slot": 2, "velocity": 0.50 },
+              { "sample_slot": 2, "velocity": 0.50 },
+              { "sample_slot": 2, "velocity": 0.50 },
+              { "sample_slot": 2, "velocity": 0.50 },
+              { "sample_slot": 3, "velocity": 0.80 }
+            ]
+          },
+          {
+            "sample_slot": 0,
+            "velocity": 0.85
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -75,5 +75,20 @@ class RhythmNode:
         return "\n".join(lines)
 
 
+
+def clone_tree(node: RhythmNode, parent: Optional[RhythmNode] = None) -> RhythmNode:
+    """Deep-clone a rhythm subtree while preserving timing fractions and assignments."""
+    cloned = RhythmNode(
+        start_fraction=node.start_fraction,
+        duration_fraction=node.duration_fraction,
+        parent=parent,
+        sample_slot=node.sample_slot,
+        velocity=node.velocity,
+    )
+    cloned.children = [clone_tree(child, parent=cloned) for child in node.children]
+    return cloned
+
+
+
 def create_bar_root() -> RhythmNode:
     return RhythmNode(start_fraction=0.0, duration_fraction=1.0, parent=None)

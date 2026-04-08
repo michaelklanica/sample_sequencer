@@ -86,7 +86,7 @@ def run_phase1_demo() -> None:
     print_events(events, pattern, bpm)
 
     renderer = OfflineRenderer(headroom_gain=0.9)
-    result = renderer.render_pattern(pattern, events, library, bpm)
+    result = renderer.render_pattern(pattern, library, bpm)
 
     print("\nRender Info:")
     print(f"  sample_rate: {result.sample_rate}")

@@ -91,5 +91,5 @@ def load_pattern_project_from_json(json_path: Path | str) -> LoadedPatternProjec
         bpm=float(data["bpm"]),
         sample_folder=sample_folder,
         sample_slot_files=sample_slot_files,
-        pattern=Pattern(bars=bars),
+        pattern=Pattern(bars=bars, playback_order=data.get("playback_order")),
     )

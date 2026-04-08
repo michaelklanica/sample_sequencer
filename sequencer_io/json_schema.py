@@ -113,6 +113,17 @@ def validate_pattern_json(data: Any) -> None:
         if not isinstance(filename, str) or not filename.strip():
             raise _err(f"$.sample_slots['{slot}']", "filename must be a non-empty string")
 
+
+    playback_order = data.get("playback_order")
+    if playback_order is not None:
+        if not isinstance(playback_order, list) or len(playback_order) == 0:
+            raise _err("$.playback_order", "playback_order must be a non-empty list when provided")
+        for idx, bar_index in enumerate(playback_order):
+            if isinstance(bar_index, bool) or not isinstance(bar_index, int):
+                raise _err(f"$.playback_order[{idx}]", "bar index must be an integer")
+            if bar_index < 0:
+                raise _err(f"$.playback_order[{idx}]", "bar index must be >= 0")
+
     bars = data["bars"]
     if not isinstance(bars, list) or len(bars) == 0:
         raise _err("$.bars", "bars must be a non-empty list")
@@ -144,3 +155,11 @@ def validate_pattern_json(data: Any) -> None:
             raise _err(f"{bpath}.time_signature.denominator", "denominator should be a power of two")
 
         _validate_tree_node(bar["tree"], f"{bpath}.tree")
+
+    if playback_order is not None:
+        for idx, bar_index in enumerate(playback_order):
+            if bar_index >= len(bars):
+                raise _err(
+                    f"$.playback_order[{idx}]",
+                    f"bar index {bar_index} out of range for {len(bars)} bars",
+                )

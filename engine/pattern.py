@@ -32,11 +32,37 @@ class Pattern:
             raise ValueError("Pattern must contain at least one bar.")
 
         if self.playback_order is not None:
-            if len(self.playback_order) == 0:
-                raise ValueError("playback_order cannot be empty when provided.")
-            for index in self.playback_order:
-                if index < 0 or index >= len(self.bars):
-                    raise ValueError(f"playback_order index out of range: {index}")
+            self.validate_playback_order(self.playback_order, len(self.bars))
+
+    @staticmethod
+    def validate_playback_order(order: list[int], bar_count: int) -> None:
+        if len(order) == 0:
+            raise ValueError("playback_order cannot be empty when provided.")
+        for index in order:
+            if index < 0 or index >= bar_count:
+                raise ValueError(f"playback_order index out of range: {index}")
+
+    def set_playback_order(self, order: list[int] | None) -> None:
+        if order is None:
+            self.playback_order = None
+            return
+        self.validate_playback_order(order, len(self.bars))
+        self.playback_order = list(order)
+
+    def remap_playback_order_for_insert(self, insert_index: int) -> None:
+        if self.playback_order is None:
+            return
+        self.playback_order = [idx + 1 if idx >= insert_index else idx for idx in self.playback_order]
+
+    def remap_playback_order_for_delete(self, deleted_index: int) -> None:
+        if self.playback_order is None:
+            return
+        remapped: list[int] = []
+        for idx in self.playback_order:
+            if idx == deleted_index:
+                continue
+            remapped.append(idx - 1 if idx > deleted_index else idx)
+        self.playback_order = remapped if remapped else None
 
     def flatten_events(self) -> list[SequencerEvent]:
         events: list[SequencerEvent] = []

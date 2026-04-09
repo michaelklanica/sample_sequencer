@@ -36,10 +36,11 @@ def _build_tree(node_data: dict[str, Any], parent: RhythmNode) -> None:
 
     velocity_raw = node_data.get("velocity", 1.0)
     velocity = float(velocity_raw)
+    pitch_offset = int(node_data.get("pitch_offset", 0))
     sample_slot = node_data.get("sample_slot")
     if sample_slot is not None:
         sample_slot = _slot_to_int(sample_slot)
-    parent.assign(sample_slot=sample_slot, velocity=velocity)
+    parent.assign(sample_slot=sample_slot, velocity=velocity, pitch_offset=pitch_offset)
 
 
 def load_pattern_project_from_json(json_path: Path | str) -> LoadedPatternProject:

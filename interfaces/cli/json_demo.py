@@ -54,7 +54,7 @@ def _print_timeline_debug(pattern: Pattern, bpm: float) -> None:
             f"  [{i:02d}] chain_pos={event.chain_position} src_bar={event.source_bar_index} "
             f"abs_start={event.start_seconds:.4f}s local_start={event.local_start_fraction:.6f} "
             f"local_dur={event.local_duration_fraction:.6f} (~{dur_s:.4f}s) "
-            f"slot={event.sample_slot} vel={event.velocity:.2f}"
+            f"slot={event.sample_slot} vel={event.velocity:.2f} pitch={event.pitch_offset}"
         )
 
     print(f"\nTimeline duration: {pattern_duration_seconds(pattern, bpm):.4f}s")

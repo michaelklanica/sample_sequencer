@@ -15,6 +15,7 @@ from audio.sample_library import MAX_SLOTS, SampleLibrary
 from engine.pattern import Bar, Pattern
 from engine.rhythm_tree import RhythmNode
 from engine.time_signature import TimeSignature
+from engine.tree_ops import copy_subtree, paste_subtree_over_target, reset_subtree
 from interfaces.cli.phase1_demo import build_demo_pattern
 from sequencer_io import LoadedPatternProject, load_pattern_project_from_json
 from sequencer_io.json_errors import PatternJsonError, PatternValidationError
@@ -80,12 +81,18 @@ class SequencerTUI(App[None]):
         Binding("v", "set_velocity", "Set Velocity"),
         Binding("p", "play_pattern", "Play Pattern"),
         Binding("b", "play_bar", "Play Bar"),
+        Binding("m", "toggle_rest", "Toggle Rest"),
+        Binding("t", "set_pitch_offset", "Set Pitch"),
+        Binding("y", "copy_subtree", "Copy"),
+        Binding("u", "paste_subtree", "Paste"),
+        Binding("r", "reset_subtree", "Reset Node"),
+        Binding("o", "edit_playback_order", "Playback Order"),
         Binding("a", "add_bar", "Add Bar"),
         Binding("d", "duplicate_bar", "Duplicate Bar"),
         Binding("x", "delete_bar", "Delete Bar"),
         Binding("[", "prev_bar", "Prev Bar"),
         Binding("]", "next_bar", "Next Bar"),
-        Binding("r", "refresh_tree", "Refresh"),
+        Binding("R", "refresh_tree", "Refresh"),
     ]
 
     def __init__(self, pattern: Pattern, bpm: float, pattern_name: str, sample_library: SampleLibrary) -> None:
@@ -98,6 +105,7 @@ class SequencerTUI(App[None]):
         self.selected_path = "0"
         self.node_map: dict[str, RhythmNode] = {}
         self.status_lines: list[str] = []
+        self.subtree_clipboard: RhythmNode | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -131,7 +139,7 @@ class SequencerTUI(App[None]):
         node_type = "Leaf" if node.is_leaf() else "Node"
         base = f"[{node_type} {path}] start={node.start_fraction:.3f} dur={node.duration_fraction:.3f}"
         if node.is_leaf():
-            return f"{base} slot={node.sample_slot} vel={node.velocity:.2f}"
+            return f"{base} slot={node.sample_slot} vel={node.velocity:.2f} pitch={node.pitch_offset}"
         return f"{base} split={len(node.children)}"
 
     def _rebuild_tree(self) -> None:
@@ -194,7 +202,9 @@ class SequencerTUI(App[None]):
                         f"Start: {node.start_fraction:.6f}",
                         f"Duration: {node.duration_fraction:.6f}",
                         f"Sample Slot: {node.sample_slot}",
+                        f"Rest: {node.sample_slot is None}",
                         f"Velocity: {node.velocity:.2f}",
+                        f"Pitch Offset: {node.pitch_offset}",
                     ]
                 )
             )
@@ -203,7 +213,10 @@ class SequencerTUI(App[None]):
         info_lines = [
             f"Pattern: {self.pattern_name} | BPM: {self.bpm}",
             f"Loaded slots: {self._samples_summary()}",
-            "Keys: 2-6 split | s slot | v vel | p play pattern | b play bar | a/d/x bars | [/] switch | q quit",
+            (
+                "Keys: 2-6 split | s slot | v vel | t pitch | m rest | y copy | u paste | r reset | "
+                "o order | p pattern | b bar | a/d/x bars | [/] switch | q quit"
+            ),
         ]
         info_lines.extend(self.status_lines[-5:])
         status.update("\n".join(info_lines))
@@ -242,6 +255,7 @@ class SequencerTUI(App[None]):
             ts = TimeSignature(4, 4)
         new_bar = Bar(time_signature=TimeSignature(ts.numerator, ts.denominator))
         insert_at = self.current_bar_index + 1
+        self.pattern.remap_playback_order_for_insert(insert_at)
         self.pattern.bars.insert(insert_at, new_bar)
         self.current_bar_index = insert_at
         self.selected_path = "0"
@@ -252,6 +266,7 @@ class SequencerTUI(App[None]):
     def action_duplicate_bar(self) -> None:
         source = self.pattern.bars[self.current_bar_index]
         insert_at = self.current_bar_index + 1
+        self.pattern.remap_playback_order_for_insert(insert_at)
         self.pattern.bars.insert(insert_at, source.clone())
         self.current_bar_index = insert_at
         self.selected_path = "0"
@@ -266,6 +281,7 @@ class SequencerTUI(App[None]):
             return
         deleted = self.current_bar_index
         self.pattern.bars.pop(self.current_bar_index)
+        self.pattern.remap_playback_order_for_delete(deleted)
         self.current_bar_index = min(self.current_bar_index, len(self.pattern.bars) - 1)
         self.selected_path = "0"
         self._rebuild_tree()
@@ -295,14 +311,14 @@ class SequencerTUI(App[None]):
             if value is None:
                 self._push_status("Slot edit canceled.")
             elif value == "" or value.lower() == "x":
-                node.assign(sample_slot=None, velocity=node.velocity)
+                node.assign(sample_slot=None, velocity=node.velocity, pitch_offset=node.pitch_offset)
                 self._push_status(f"Cleared slot on {self.selected_path}.")
             else:
                 try:
                     slot = int(value)
                     if slot < 0 or slot >= MAX_SLOTS:
                         raise ValueError
-                    node.assign(sample_slot=slot, velocity=node.velocity)
+                    node.assign(sample_slot=slot, velocity=node.velocity, pitch_offset=node.pitch_offset)
                     self._push_status(f"Assigned slot {slot} to {self.selected_path}.")
                 except ValueError:
                     self._push_status("Invalid slot. Enter 0..15, blank, or x.")
@@ -326,7 +342,7 @@ class SequencerTUI(App[None]):
                     velocity = float(value)
                     if velocity < 0.0 or velocity > 1.0:
                         raise ValueError
-                    node.assign(sample_slot=node.sample_slot, velocity=velocity)
+                    node.assign(sample_slot=node.sample_slot, velocity=velocity, pitch_offset=node.pitch_offset)
                     self._push_status(f"Set velocity {velocity:.2f} on {self.selected_path}.")
                 except ValueError:
                     self._push_status("Invalid velocity. Enter a number in [0.0, 1.0].")
@@ -334,6 +350,115 @@ class SequencerTUI(App[None]):
             self._refresh_panels()
 
         self.push_screen(PromptScreen("Set velocity (0.0 to 1.0):"), handle)
+
+    def action_set_pitch_offset(self) -> None:
+        node = self._selected_node()
+        if node is None or not node.is_leaf():
+            self._push_status("Pitch edit requires a selected leaf.")
+            self._refresh_panels()
+            return
+
+        def handle(value: str | None) -> None:
+            if value is None:
+                self._push_status("Pitch edit canceled.")
+            else:
+                try:
+                    pitch_offset = int(value)
+                    if pitch_offset < -24 or pitch_offset > 24:
+                        raise ValueError
+                    node.assign(sample_slot=node.sample_slot, velocity=node.velocity, pitch_offset=pitch_offset)
+                    self._push_status(f"Pitch offset for leaf {self.selected_path} set to {pitch_offset}.")
+                except ValueError:
+                    self._push_status("Invalid pitch offset. Enter an integer in [-24, 24].")
+            self._rebuild_tree()
+            self._refresh_panels()
+
+        self.push_screen(PromptScreen("Set pitch offset in semitones (-24 to 24):"), handle)
+
+    def action_toggle_rest(self) -> None:
+        node = self._selected_node()
+        if node is None or not node.is_leaf():
+            self._push_status("Rest toggle requires a selected leaf.")
+            self._refresh_panels()
+            return
+
+        became_active = node.toggle_rest()
+        if became_active:
+            self._push_status(f"Leaf {self.selected_path} toggled to active (slot={node.sample_slot}).")
+        else:
+            self._push_status(f"Leaf {self.selected_path} toggled to rest.")
+        self._rebuild_tree()
+        self._refresh_panels()
+
+    def action_copy_subtree(self) -> None:
+        node = self._selected_node()
+        if node is None:
+            self._push_status("No node selected.")
+            self._refresh_panels()
+            return
+        self.subtree_clipboard = copy_subtree(node)
+        self._push_status(f"Copied subtree at path {self.selected_path}.")
+        self._refresh_panels()
+
+    def action_paste_subtree(self) -> None:
+        if self.subtree_clipboard is None:
+            self._push_status("Paste rejected: clipboard is empty.")
+            self._refresh_panels()
+            return
+        node = self._selected_node()
+        if node is None:
+            self._push_status("No node selected.")
+            self._refresh_panels()
+            return
+
+        paste_subtree_over_target(node, self.subtree_clipboard)
+        if node.parent is None:
+            self.selected_path = "0"
+        self._rebuild_tree()
+        self._push_status(f"Pasted subtree over node {self.selected_path}.")
+        self._refresh_panels()
+
+    def action_reset_subtree(self) -> None:
+        node = self._selected_node()
+        if node is None:
+            self._push_status("No node selected.")
+            self._refresh_panels()
+            return
+        reset_subtree(node)
+        self._rebuild_tree()
+        self._push_status(f"Reset subtree {self.selected_path} to blank leaf.")
+        self._refresh_panels()
+
+    def action_edit_playback_order(self) -> None:
+        current = self.pattern.resolved_playback_order()
+
+        def handle(value: str | None) -> None:
+            if value is None:
+                self._push_status("Playback order edit canceled.")
+                self._refresh_panels()
+                return
+
+            if value == "":
+                self.pattern.set_playback_order(None)
+                self._push_status("Playback order cleared; using natural bar order.")
+                self._refresh_panels()
+                return
+
+            try:
+                order = [int(part.strip()) for part in value.split(",") if part.strip() != ""]
+                self.pattern.set_playback_order(order)
+                self._push_status(f"Playback order set to {self.pattern.resolved_playback_order()}.")
+            except ValueError as exc:
+                self._push_status(f"Invalid playback order: {exc}")
+            self._refresh_panels()
+
+        self.push_screen(
+            PromptScreen(
+                "Set playback order as comma-separated bar indices (blank clears):",
+                placeholder=",".join(str(idx) for idx in current),
+            ),
+            handle,
+        )
 
     def action_play_pattern(self) -> None:
         self._render_and_play_pattern(self.pattern, "Played full pattern chain")

@@ -16,6 +16,7 @@ class TimelineEvent:
     local_duration_fraction: float
     sample_slot: int | None
     velocity: float
+    pitch_offset: int
 
 
 def build_timeline_events(pattern: Pattern, bpm: float) -> list[TimelineEvent]:
@@ -41,6 +42,7 @@ def build_timeline_events(pattern: Pattern, bpm: float) -> list[TimelineEvent]:
                     local_duration_fraction=event.duration_fraction,
                     sample_slot=event.sample_slot,
                     velocity=event.velocity,
+                    pitch_offset=event.pitch_offset,
                 )
             )
         current_offset_seconds += bar_seconds

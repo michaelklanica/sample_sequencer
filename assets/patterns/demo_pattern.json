@@ -17,7 +17,7 @@
         "children": [
           { "sample_slot": 0, "velocity": 1.0 },
           { "sample_slot": 2, "velocity": 0.70 },
-          { "sample_slot": 1, "velocity": 0.90 },
+          { "sample_slot": 1, "velocity": 0.90, "pitch_offset": -2 },
           { "sample_slot": 2, "velocity": 0.70 }
         ]
       }
@@ -29,7 +29,7 @@
         "children": [
           { "sample_slot": 0, "velocity": 0.95 },
           { "sample_slot": 2, "velocity": 0.60 },
-          { "sample_slot": 1, "velocity": 0.85 }
+          { "sample_slot": 1, "velocity": 0.85, "pitch_offset": 3 }
         ]
       }
     },

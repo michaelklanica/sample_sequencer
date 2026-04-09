@@ -43,16 +43,29 @@ def _validate_leaf_node(node: dict[str, Any], path: str) -> None:
         if not (0.0 <= float(velocity) <= 1.0):
             raise _err(f"{path}.velocity", f"velocity {velocity} out of range (expected 0.0..1.0)")
 
+    if "pitch_offset" in node:
+        pitch_offset = node["pitch_offset"]
+        if isinstance(pitch_offset, bool) or not isinstance(pitch_offset, int):
+            raise _err(f"{path}.pitch_offset", "pitch_offset must be an integer in range -24..24")
+        if not (-24 <= pitch_offset <= 24):
+            raise _err(
+                f"{path}.pitch_offset",
+                f"pitch_offset {pitch_offset} out of range (expected -24..24)",
+            )
+
 
 def _validate_tree_node(node: Any, path: str) -> None:
     if not isinstance(node, dict):
         raise _err(path, "node must be an object")
 
     has_internal_fields = "split" in node or "children" in node
-    has_leaf_fields = "sample_slot" in node or "velocity" in node
+    has_leaf_fields = "sample_slot" in node or "velocity" in node or "pitch_offset" in node
 
     if has_internal_fields and has_leaf_fields:
-        raise _err(path, "node cannot mix internal fields (split/children) with leaf fields (sample_slot/velocity)")
+        raise _err(
+            path,
+            "node cannot mix internal fields (split/children) with leaf fields (sample_slot/velocity/pitch_offset)",
+        )
 
     if has_internal_fields:
         if "split" not in node or "children" not in node:

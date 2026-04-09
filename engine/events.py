@@ -13,6 +13,7 @@ class SequencerEvent:
     duration_fraction: float
     sample_slot: int | None
     velocity: float
+    pitch_offset: int
 
 
 def flatten_leaf_events(root: RhythmNode, bar_index: int = 0) -> list[SequencerEvent]:
@@ -27,6 +28,7 @@ def flatten_leaf_events(root: RhythmNode, bar_index: int = 0) -> list[SequencerE
                 duration_fraction=leaf.duration_fraction,
                 sample_slot=leaf.sample_slot,
                 velocity=leaf.velocity,
+                pitch_offset=leaf.pitch_offset,
             )
         )
     events.sort(key=lambda ev: (ev.start_fraction, ev.duration_fraction))

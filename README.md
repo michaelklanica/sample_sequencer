@@ -1,33 +1,38 @@
-# Sample Sequencer — Phase 3 Multi-Bar Patterns + Pattern Chaining
+# Sample Sequencer — Phase 4 Tracker-Style Tree Editing
 
-Phase 3 extends the one-bar prototype into a true **multi-bar offline sequencer** while keeping engine, audio, and UI layers separated.
+Phase 4 keeps the multi-bar offline architecture from earlier phases and adds first practical
+**tracker-style tree editing** operations while keeping engine, audio, and UI layers separated.
 
 ## What this phase implements
 
-- Pattern model now supports:
+- Pattern model supports:
   - multiple bars
   - per-bar time signatures
   - optional `playback_order` bar-chain indices
-- Offline rendering now supports:
+- Leaf event model supports:
+  - `sample_slot`
+  - `velocity`
+  - `pitch_offset` (integer semitone metadata)
+- Rhythm tree editing now supports:
+  - rest/mute toggle for leaves
+  - subtree copy + paste-over replacement
+  - subtree reset to blank leaf
+- TUI now supports:
+  - playback order prompt editing
+  - leaf pitch offset editing
+- Offline rendering supports:
   - rendering all bars in natural order
   - rendering explicit chained order (e.g. `[0, 1, 0, 2]`)
   - bar-duration-aware timeline assembly across mixed time signatures
 - JSON format now supports:
   - `bars` as a non-empty list
   - optional `playback_order` with validation
+  - optional leaf `pitch_offset` in range `-24..24`
 - CLI JSON mode now prints:
   - pattern-level info
   - per-bar duration + leaf event counts
-  - timeline events with chain position and absolute times
+  - timeline events with chain position, absolute times, and pitch offset
   - final render details
-- Textual TUI now supports:
-  - viewing all bars and active bar
-  - switching bars (`[` and `]`)
-  - adding bar (`a`)
-  - duplicating bar (`d`)
-  - deleting bar safely (`x`, never allows zero bars)
-  - playing current bar (`b`)
-  - playing full pattern chain (`p`)
 
 ## Current limitations (intentional)
 
@@ -35,7 +40,11 @@ Phase 3 extends the one-bar prototype into a true **multi-bar offline sequencer*
 - No real-time transport/scheduler yet
 - No loop transport yet
 - No arranger/song timeline yet
-- TUI currently shows playback order (read-only in this phase)
+- `pitch_offset` is metadata-only in this phase:
+  - stored on leaf events
+  - loaded from JSON and editable in TUI
+  - printed in debug output
+  - **not yet sonically applied during rendering**
 - Save-back JSON writing is not implemented in this phase
 
 ## Setup
@@ -94,7 +103,13 @@ python main.py --tui assets/patterns/demo_pattern.json
   "bars": [
     {
       "time_signature": { "numerator": 4, "denominator": 4 },
-      "tree": { "split": 4, "children": [ ... ] }
+      "tree": {
+        "split": 4,
+        "children": [
+          { "sample_slot": 0, "velocity": 1.0, "pitch_offset": 0 },
+          { "sample_slot": 1, "velocity": 0.8, "pitch_offset": -2 }
+        ]
+      }
     }
   ]
 }
@@ -104,6 +119,7 @@ Validation rules:
 
 - `bars` must be non-empty
 - `playback_order`, if present, must be non-empty and contain only valid bar indices
+- leaf `pitch_offset`, if present, must be an integer in `-24..24`
 - each bar keeps existing tree/time-signature validation rules
 
 ## TUI key bindings
@@ -112,19 +128,30 @@ Validation rules:
 - `2` / `3` / `4` / `5` / `6`: split selected **leaf** into equal parts
 - `s`: set/clear sample slot on selected leaf (`0..15`, blank or `x` clears)
 - `v`: set velocity on selected leaf (`0.0..1.0`)
+- `t`: set pitch offset on selected leaf (`-24..24`)
+- `m`: toggle selected leaf rest/active
+- `y`: copy selected subtree into clipboard
+- `u`: paste clipboard subtree over selected node
+- `r`: reset selected node/subtree to blank leaf
+- `o`: edit playback order (`0,1,0,2`; blank clears custom order)
 - `[` / `]`: previous/next bar
 - `a`: add a new bar after current bar
 - `d`: duplicate current bar
 - `x`: delete current bar (blocked if it is the last remaining bar)
 - `b`: render + play current bar once
 - `p`: render + play full pattern/chain once
-- `r`: refresh tree/panels
+- `R`: refresh tree/panels
 - `q`: quit
 
 ## Validation behavior
 
 - Split is leaf-only.
-- Slot assignment and velocity editing are leaf-only.
+- Slot/velocity/pitch editing and rest toggle are leaf-only.
+- Copy works on any node; paste requires clipboard content.
+- Paste replaces the target subtree and rebinds timing to the target span.
+- Reset works on any selected node and creates a blank leaf for that span.
+- Playback order prompt validates integer indices and bar bounds.
+- Blank playback-order input clears custom order and uses natural bar order.
 - Deleting last remaining bar is rejected with status message.
 - Missing sample-slot audio does not crash rendering (events are skipped).
 - Invalid JSON chain indices fail validation.

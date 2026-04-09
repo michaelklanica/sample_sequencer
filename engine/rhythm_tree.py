@@ -14,6 +14,8 @@ class RhythmNode:
     children: list["RhythmNode"] = field(default_factory=list)
     sample_slot: Optional[int] = None
     velocity: float = 1.0
+    pitch_offset: int = 0
+    _last_sample_slot: Optional[int] = field(default=None, repr=False, compare=False)
 
     def is_leaf(self) -> bool:
         return len(self.children) == 0
@@ -30,6 +32,8 @@ class RhythmNode:
         # Once a node becomes internal, it no longer holds playable metadata.
         self.sample_slot = None
         self.velocity = 1.0
+        self.pitch_offset = 0
+        self._last_sample_slot = None
 
         for i in range(parts):
             child_start = self.start_fraction + (i * child_duration)
@@ -42,13 +46,40 @@ class RhythmNode:
             )
         return self.children
 
-    def assign(self, sample_slot: Optional[int], velocity: float = 1.0) -> None:
+    def assign(self, sample_slot: Optional[int], velocity: float = 1.0, pitch_offset: int = 0) -> None:
         if not self.is_leaf():
             raise ValueError("Can only assign sample data to a leaf node.")
         if velocity < 0.0:
             raise ValueError("Velocity must be >= 0.0.")
         self.sample_slot = sample_slot
         self.velocity = velocity
+        self.pitch_offset = pitch_offset
+        if sample_slot is not None:
+            self._last_sample_slot = sample_slot
+
+    def toggle_rest(self) -> bool:
+        """Toggle leaf between active and rest.
+
+        Returns True when the node becomes active, False when it becomes rest.
+        """
+        if not self.is_leaf():
+            raise ValueError("Can only toggle rest on a leaf node.")
+
+        if self.sample_slot is None:
+            self.sample_slot = self._last_sample_slot
+            return self.sample_slot is not None
+
+        self._last_sample_slot = self.sample_slot
+        self.sample_slot = None
+        return False
+
+    def reset_to_blank_leaf(self) -> None:
+        """Reset any node to a single blank leaf while preserving timing span."""
+        self.children = []
+        self.sample_slot = None
+        self.velocity = 1.0
+        self.pitch_offset = 0
+        self._last_sample_slot = None
 
     def iter_leaves(self) -> Iterator["RhythmNode"]:
         if self.is_leaf():
@@ -62,7 +93,7 @@ class RhythmNode:
         marker = "leaf" if self.is_leaf() else "node"
         assign = ""
         if self.is_leaf():
-            assign = f", slot={self.sample_slot}, vel={self.velocity:.2f}"
+            assign = f", slot={self.sample_slot}, vel={self.velocity:.2f}, pitch={self.pitch_offset}"
         text = (
             f"{indent}- {marker}(start={self.start_fraction:.6f}, "
             f"dur={self.duration_fraction:.6f}{assign})"
@@ -84,6 +115,8 @@ def clone_tree(node: RhythmNode, parent: Optional[RhythmNode] = None) -> RhythmN
         parent=parent,
         sample_slot=node.sample_slot,
         velocity=node.velocity,
+        pitch_offset=node.pitch_offset,
+        _last_sample_slot=node._last_sample_slot,
     )
     cloned.children = [clone_tree(child, parent=cloned) for child in node.children]
     return cloned

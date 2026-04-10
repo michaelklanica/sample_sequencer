@@ -15,6 +15,7 @@ from audio.playback import play_once
 from audio.realtime import RealtimeLooper
 from audio.renderer import OfflineRenderer
 from audio.sample_library import MAX_SLOTS, SampleLibrary
+from engine.edit_policy import classify_edit, invalidation_reason
 from engine.pattern import Bar, Pattern
 from engine.rhythm_tree import RhythmNode
 from engine.time_signature import TimeSignature
@@ -256,6 +257,7 @@ class SequencerTUI(App[None]):
         snap = self.realtime_looper.transport_snapshot()
         lines: list[str] = ["Transport:"]
         lines.append(f"State: {'PLAYING' if snap.is_playing else 'STOPPED'}")
+        lines.append("Live-safe edits: ON (velocity/slot/pitch/rest)")
 
         mode_label = {
             "bar": "BAR LOOP",
@@ -305,7 +307,7 @@ class SequencerTUI(App[None]):
         self._refresh_panels()
 
     def action_prev_bar(self) -> None:
-        self._stop_realtime_for_bar_change()
+        self._apply_edit_policy("select_bar")
         self.current_bar_index = (self.current_bar_index - 1) % len(self.pattern.bars)
         self.selected_path = "0"
         self.realtime_looper.set_bar_loop(self.pattern.bars[self.current_bar_index], bpm=self.bpm)
@@ -314,7 +316,7 @@ class SequencerTUI(App[None]):
         self._refresh_panels()
 
     def action_next_bar(self) -> None:
-        self._stop_realtime_for_bar_change()
+        self._apply_edit_policy("select_bar")
         self.current_bar_index = (self.current_bar_index + 1) % len(self.pattern.bars)
         self.selected_path = "0"
         self.realtime_looper.set_bar_loop(self.pattern.bars[self.current_bar_index], bpm=self.bpm)
@@ -323,7 +325,7 @@ class SequencerTUI(App[None]):
         self._refresh_panels()
 
     def action_add_bar(self) -> None:
-        self._stop_realtime_for_structure_change()
+        self._apply_edit_policy("add_bar")
         if self.pattern.bars:
             ts = self.pattern.bars[self.current_bar_index].time_signature
         else:
@@ -340,7 +342,7 @@ class SequencerTUI(App[None]):
         self._refresh_panels()
 
     def action_duplicate_bar(self) -> None:
-        self._stop_realtime_for_structure_change()
+        self._apply_edit_policy("duplicate_bar")
         source = self.pattern.bars[self.current_bar_index]
         insert_at = self.current_bar_index + 1
         self.pattern.remap_playback_order_for_insert(insert_at)
@@ -353,7 +355,7 @@ class SequencerTUI(App[None]):
         self._refresh_panels()
 
     def action_delete_bar(self) -> None:
-        self._stop_realtime_for_structure_change()
+        self._apply_edit_policy("delete_bar")
         if len(self.pattern.bars) == 1:
             self._push_status("Delete rejected: pattern must contain at least one bar.")
             self._refresh_panels()
@@ -369,7 +371,7 @@ class SequencerTUI(App[None]):
         self._refresh_panels()
 
     def action_split_selected(self, parts: int) -> None:
-        self._stop_realtime_for_structure_change()
+        self._apply_edit_policy("split_selected")
         node = self._selected_node()
         if node is None:
             self._push_status("No node selected.")
@@ -382,7 +384,6 @@ class SequencerTUI(App[None]):
         self._refresh_panels()
 
     def action_set_slot(self) -> None:
-        self._stop_realtime_for_structure_change()
         node = self._selected_node()
         if node is None or not node.is_leaf():
             self._push_status("Slot assignment requires a selected leaf.")
@@ -393,15 +394,21 @@ class SequencerTUI(App[None]):
             if value is None:
                 self._push_status("Slot edit canceled.")
             elif value == "" or value.lower() == "x":
+                was_live_safe = self._apply_edit_policy("set_slot")
                 node.assign(sample_slot=None, velocity=node.velocity, pitch_offset=node.pitch_offset)
                 self._push_status(f"Cleared slot on {self.selected_path}.")
+                if was_live_safe:
+                    self._push_status(f"Playback continues: updated sample slot for leaf {self.selected_path}.")
             else:
                 try:
                     slot = int(value)
                     if slot < 0 or slot >= MAX_SLOTS:
                         raise ValueError
+                    was_live_safe = self._apply_edit_policy("set_slot")
                     node.assign(sample_slot=slot, velocity=node.velocity, pitch_offset=node.pitch_offset)
                     self._push_status(f"Assigned slot {slot} to {self.selected_path}.")
+                    if was_live_safe:
+                        self._push_status(f"Playback continues: updated sample slot for leaf {self.selected_path}.")
                 except ValueError:
                     self._push_status("Invalid slot. Enter 0..15, blank, or x.")
             self._rebuild_tree()
@@ -410,7 +417,6 @@ class SequencerTUI(App[None]):
         self.push_screen(PromptScreen("Set sample slot (0-15, blank/x clears):"), handle)
 
     def action_set_velocity(self) -> None:
-        self._stop_realtime_for_structure_change()
         node = self._selected_node()
         if node is None or not node.is_leaf():
             self._push_status("Velocity edit requires a selected leaf.")
@@ -425,8 +431,11 @@ class SequencerTUI(App[None]):
                     velocity = float(value)
                     if velocity < 0.0 or velocity > 1.0:
                         raise ValueError
+                    was_live_safe = self._apply_edit_policy("set_velocity")
                     node.assign(sample_slot=node.sample_slot, velocity=velocity, pitch_offset=node.pitch_offset)
                     self._push_status(f"Set velocity {velocity:.2f} on {self.selected_path}.")
+                    if was_live_safe:
+                        self._push_status(f"Playback continues: updated velocity for leaf {self.selected_path}.")
                 except ValueError:
                     self._push_status("Invalid velocity. Enter a number in [0.0, 1.0].")
             self._rebuild_tree()
@@ -435,7 +444,6 @@ class SequencerTUI(App[None]):
         self.push_screen(PromptScreen("Set velocity (0.0 to 1.0):"), handle)
 
     def action_set_pitch_offset(self) -> None:
-        self._stop_realtime_for_structure_change()
         node = self._selected_node()
         if node is None or not node.is_leaf():
             self._push_status("Pitch edit requires a selected leaf.")
@@ -450,8 +458,11 @@ class SequencerTUI(App[None]):
                     pitch_offset = int(value)
                     if pitch_offset < -24 or pitch_offset > 24:
                         raise ValueError
+                    was_live_safe = self._apply_edit_policy("set_pitch_offset")
                     node.assign(sample_slot=node.sample_slot, velocity=node.velocity, pitch_offset=pitch_offset)
                     self._push_status(f"Pitch offset for leaf {self.selected_path} set to {pitch_offset}.")
+                    if was_live_safe:
+                        self._push_status(f"Playback continues: updated pitch offset for leaf {self.selected_path}.")
                 except ValueError:
                     self._push_status("Invalid pitch offset. Enter an integer in [-24, 24].")
             self._rebuild_tree()
@@ -460,18 +471,20 @@ class SequencerTUI(App[None]):
         self.push_screen(PromptScreen("Set pitch offset in semitones (-24 to 24):"), handle)
 
     def action_toggle_rest(self) -> None:
-        self._stop_realtime_for_structure_change()
         node = self._selected_node()
         if node is None or not node.is_leaf():
             self._push_status("Rest toggle requires a selected leaf.")
             self._refresh_panels()
             return
 
+        was_live_safe = self._apply_edit_policy("toggle_rest")
         became_active = node.toggle_rest()
         if became_active:
             self._push_status(f"Leaf {self.selected_path} toggled to active (slot={node.sample_slot}).")
         else:
             self._push_status(f"Leaf {self.selected_path} toggled to rest.")
+        if was_live_safe:
+            self._push_status(f"Playback continues: updated rest state for leaf {self.selected_path}.")
         self._rebuild_tree()
         self._refresh_panels()
 
@@ -486,7 +499,7 @@ class SequencerTUI(App[None]):
         self._refresh_panels()
 
     def action_paste_subtree(self) -> None:
-        self._stop_realtime_for_structure_change()
+        self._apply_edit_policy("paste_subtree")
         if self.subtree_clipboard is None:
             self._push_status("Paste rejected: clipboard is empty.")
             self._refresh_panels()
@@ -505,7 +518,7 @@ class SequencerTUI(App[None]):
         self._refresh_panels()
 
     def action_reset_subtree(self) -> None:
-        self._stop_realtime_for_structure_change()
+        self._apply_edit_policy("reset_subtree")
         node = self._selected_node()
         if node is None:
             self._push_status("No node selected.")
@@ -517,7 +530,6 @@ class SequencerTUI(App[None]):
         self._refresh_panels()
 
     def action_edit_playback_order(self) -> None:
-        self._stop_realtime_for_playback_order_change()
         current = self.pattern.resolved_playback_order()
 
         def handle(value: str | None) -> None:
@@ -527,6 +539,7 @@ class SequencerTUI(App[None]):
                 return
 
             if value == "":
+                self._apply_edit_policy("edit_playback_order")
                 self.pattern.set_playback_order(None)
                 self._push_status("Playback order cleared; using natural bar order.")
                 self._refresh_panels()
@@ -534,6 +547,7 @@ class SequencerTUI(App[None]):
 
             try:
                 order = [int(part.strip()) for part in value.split(",") if part.strip() != ""]
+                self._apply_edit_policy("edit_playback_order")
                 self.pattern.set_playback_order(order)
                 self._push_status(f"Playback order set to {self.pattern.resolved_playback_order()}.")
             except ValueError as exc:
@@ -703,20 +717,24 @@ class SequencerTUI(App[None]):
             self._push_status(f"Render/play failed: {exc}")
         self._refresh_panels()
 
-    def _stop_realtime_for_bar_change(self) -> None:
-        if self.realtime_looper.is_playing and self.realtime_looper.mode == "bar":
-            self.realtime_looper.stop(reason="active bar changed")
-            self._push_status("Stopped realtime playback because active bar changed.")
+    def _apply_edit_policy(self, action_name: str) -> bool:
+        """Apply centralized live-safe/transport-invalidating realtime edit policy.
 
-    def _stop_realtime_for_structure_change(self) -> None:
-        if self.realtime_looper.is_playing:
-            self.realtime_looper.stop(reason="pattern structure changed")
-            self._push_status("Stopped realtime playback because pattern structure changed.")
+        Returns True when the edit is live-safe and playback is currently active.
+        """
+        if classify_edit(action_name) == "live_safe":
+            return self.realtime_looper.is_playing
 
-    def _stop_realtime_for_playback_order_change(self) -> None:
-        if self.realtime_looper.is_playing:
-            self.realtime_looper.stop(reason="playback order changed")
-            self._push_status("Stopped realtime playback because playback order changed.")
+        if not self.realtime_looper.is_playing:
+            return False
+
+        if action_name == "select_bar" and self.realtime_looper.mode != "bar":
+            return False
+
+        reason = invalidation_reason(action_name)
+        self.realtime_looper.stop(reason=reason)
+        self._push_status(f"Stopped realtime playback because {reason}.")
+        return False
 
 
 def _load_demo_library() -> SampleLibrary:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from textual.timer import Timer
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -54,16 +55,18 @@ class PromptScreen(ModalScreen[str | None]):
 
 class SequencerTUI(App[None]):
     DEFAULT_EXPORT_DIR = Path("exports")
+    TRANSPORT_REFRESH_SECONDS = 0.15
 
     CSS = """
     Screen { layout: vertical; }
     #main_row { height: 1fr; }
     #left_panel { width: 2fr; }
     #right_panel { width: 1fr; }
-    #bar_list_panel, #tree_panel, #inspector_panel, #status_panel {
+    #bar_list_panel, #tree_panel, #inspector_panel, #status_panel, #transport_panel {
         border: solid $accent;
     }
     #bar_list_panel { height: 8; }
+    #transport_panel { height: 11; }
     #status_panel { height: 12; }
     #prompt_box {
         width: 60;
@@ -116,6 +119,7 @@ class SequencerTUI(App[None]):
         self.status_lines: list[str] = []
         self.subtree_clipboard: RhythmNode | None = None
         self.realtime_looper = RealtimeLooper(sample_library=sample_library, bpm=bpm)
+        self._transport_timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -125,7 +129,11 @@ class SequencerTUI(App[None]):
                 Tree("Bar 0", id="tree_panel"),
                 id="left_panel",
             ),
-            Vertical(Static("", id="inspector_panel", markup=False), id="right_panel"),
+            Vertical(
+                Static("", id="inspector_panel", markup=False),
+                Static("", id="transport_panel", markup=False),
+                id="right_panel",
+            ),
             id="main_row",
         )
         yield Static("", id="status_panel", markup=False)
@@ -133,6 +141,7 @@ class SequencerTUI(App[None]):
 
     def on_mount(self) -> None:
         self.realtime_looper.set_bar_loop(self.pattern.bars[self.current_bar_index], bpm=self.bpm)
+        self._transport_timer = self.set_interval(self.TRANSPORT_REFRESH_SECONDS, self._refresh_transport_only)
         self._rebuild_tree()
         self._push_status("Ready. Use [ ] to switch bars and arrows to navigate nodes.")
         self._refresh_panels()
@@ -201,6 +210,7 @@ class SequencerTUI(App[None]):
     def _refresh_panels(self) -> None:
         node = self._selected_node()
         inspector = self.query_one("#inspector_panel", Static)
+        transport = self.query_one("#transport_panel", Static)
         status = self.query_one("#status_panel", Static)
 
         if node is None:
@@ -224,19 +234,62 @@ class SequencerTUI(App[None]):
             )
 
         self._refresh_bar_list()
+        transport.update(self._format_transport_panel())
         info_lines = [
             f"Pattern: {self.pattern_name} | BPM: {self.bpm}",
             f"Loaded slots: {self._samples_summary()}",
-            f"Realtime: {'playing' if self.realtime_looper.is_playing else 'stopped'}"
-            f" ({self.realtime_looper.mode or 'none'})",
             (
                 "Keys: 2-6 split | s slot | v vel | t pitch | m rest | y copy | u paste | r reset | "
-                "o order | p pattern | b bar | space bar-loop | P pattern-loop | C chain-loop | e export | E bars export | "
+                "o order | p pattern | b bar | space current-bar-loop | P pattern-loop | C chain-loop | e export | E bars export | "
                 "a/d/x bars | [/] switch | q quit"
             ),
         ]
         info_lines.extend(self.status_lines[-5:])
         status.update("\n".join(info_lines))
+
+    def _refresh_transport_only(self) -> None:
+        if not self.is_mounted:
+            return
+        self.query_one("#transport_panel", Static).update(self._format_transport_panel())
+
+    def _format_transport_panel(self) -> str:
+        snap = self.realtime_looper.transport_snapshot()
+        lines: list[str] = ["Transport:"]
+        lines.append(f"State: {'PLAYING' if snap.is_playing else 'STOPPED'}")
+
+        mode_label = {
+            "bar": "BAR LOOP",
+            "pattern": "PATTERN LOOP",
+            "chain": "CHAIN LOOP",
+            None: "—",
+        }[snap.mode]
+        lines.append(f"Mode: {mode_label}")
+
+        if not snap.is_playing or snap.mode is None:
+            lines.append("Position: —")
+        else:
+            lines.append(f"Progress: {self._format_progress_line(snap.loop_progress)}")
+            if snap.mode == "bar":
+                lines.append(f"Bar: {self.current_bar_index}")
+            elif snap.mode == "pattern":
+                if snap.current_bar_index is not None:
+                    lines.append(f"Bar: {snap.current_bar_index + 1} of {len(self.pattern.bars)}")
+            elif snap.mode == "chain":
+                order = self.pattern.resolved_playback_order()
+                if snap.current_chain_position is not None:
+                    lines.append(f"Chain Step: {snap.current_chain_position + 1} of {len(order)}")
+                if snap.current_chain_bar_index is not None:
+                    lines.append(f"Bar Ref: {snap.current_chain_bar_index}")
+
+        if snap.last_stop_reason:
+            lines.append(f"Last stop: {snap.last_stop_reason}")
+        return "\n".join(lines)
+
+    def _format_progress_line(self, progress: float) -> str:
+        clamped = max(0.0, min(1.0, progress))
+        bar_chars = 20
+        filled = int(round(clamped * bar_chars))
+        return f"[{'#' * filled}{'-' * (bar_chars - filled)}] {clamped * 100:0.0f}%"
 
     def _push_status(self, message: str) -> None:
         self.status_lines.append(message)
@@ -504,7 +557,7 @@ class SequencerTUI(App[None]):
 
     def action_toggle_realtime_bar_playback(self) -> None:
         if self.realtime_looper.is_playing and self.realtime_looper.mode == "bar":
-            self.realtime_looper.stop()
+            self.realtime_looper.stop(reason="explicit user stop")
             self._push_status("Realtime bar loop stopped.")
             self._refresh_panels()
             return
@@ -515,7 +568,7 @@ class SequencerTUI(App[None]):
             return
 
         if self.realtime_looper.is_playing:
-            self.realtime_looper.stop()
+            self.realtime_looper.stop(reason="switched playback mode")
 
         try:
             self.realtime_looper.set_bar_loop(self.pattern.bars[self.current_bar_index], bpm=self.bpm)
@@ -527,7 +580,7 @@ class SequencerTUI(App[None]):
 
     def action_toggle_realtime_pattern_playback(self) -> None:
         if self.realtime_looper.is_playing and self.realtime_looper.mode == "pattern":
-            self.realtime_looper.stop()
+            self.realtime_looper.stop(reason="explicit user stop")
             self._push_status("Realtime pattern loop stopped.")
             self._refresh_panels()
             return
@@ -543,7 +596,7 @@ class SequencerTUI(App[None]):
             return
 
         if self.realtime_looper.is_playing:
-            self.realtime_looper.stop()
+            self.realtime_looper.stop(reason="switched playback mode")
 
         try:
             self.realtime_looper.set_pattern_loop(self.pattern, bpm=self.bpm)
@@ -556,7 +609,7 @@ class SequencerTUI(App[None]):
 
     def action_toggle_realtime_chain_playback(self) -> None:
         if self.realtime_looper.is_playing and self.realtime_looper.mode == "chain":
-            self.realtime_looper.stop()
+            self.realtime_looper.stop(reason="explicit user stop")
             self._push_status("Realtime chain loop stopped.")
             self._refresh_panels()
             return
@@ -579,7 +632,7 @@ class SequencerTUI(App[None]):
             return
 
         if self.realtime_looper.is_playing:
-            self.realtime_looper.stop()
+            self.realtime_looper.stop(reason="switched playback mode")
 
         try:
             self.realtime_looper.set_chain_loop(self.pattern, bpm=self.bpm)
@@ -631,7 +684,7 @@ class SequencerTUI(App[None]):
 
     def _render_and_play_pattern(self, pattern: Pattern, label: str) -> None:
         if self.realtime_looper.is_playing:
-            self.realtime_looper.stop()
+            self.realtime_looper.stop(reason="switched to one-shot playback")
             self._push_status("Realtime playback stopped before one-shot playback.")
 
         if self.sample_library.sample_rate is None:
@@ -652,17 +705,17 @@ class SequencerTUI(App[None]):
 
     def _stop_realtime_for_bar_change(self) -> None:
         if self.realtime_looper.is_playing and self.realtime_looper.mode == "bar":
-            self.realtime_looper.stop()
+            self.realtime_looper.stop(reason="active bar changed")
             self._push_status("Stopped realtime playback because active bar changed.")
 
     def _stop_realtime_for_structure_change(self) -> None:
         if self.realtime_looper.is_playing:
-            self.realtime_looper.stop()
+            self.realtime_looper.stop(reason="pattern structure changed")
             self._push_status("Stopped realtime playback because pattern structure changed.")
 
     def _stop_realtime_for_playback_order_change(self) -> None:
         if self.realtime_looper.is_playing:
-            self.realtime_looper.stop()
+            self.realtime_looper.stop(reason="playback order changed")
             self._push_status("Stopped realtime playback because playback order changed.")
 
 

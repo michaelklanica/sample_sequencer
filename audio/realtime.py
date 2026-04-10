@@ -29,6 +29,28 @@ class PreparedLoopTransport:
     events: list[PreparedTriggerEvent]
 
 
+@dataclass(frozen=True)
+class TransportSegment:
+    start_frame: int
+    end_frame: int
+    source_bar_index: int
+    chain_position: int | None
+
+
+@dataclass(frozen=True)
+class TransportStateSnapshot:
+    is_playing: bool
+    mode: Literal["bar", "pattern", "chain"] | None
+    loop_length_frames: int
+    playhead_frame: int
+    loop_progress: float
+    current_bar_index: int | None
+    current_chain_position: int | None
+    current_chain_bar_index: int | None
+    status_message: str | None
+    last_stop_reason: str | None
+
+
 @dataclass
 class ActiveVoice:
     audio: np.ndarray
@@ -55,10 +77,13 @@ class RealtimeLooper:
         self._channels: int = 1
 
         self._transport: PreparedLoopTransport | None = None
+        self._segments: list[TransportSegment] = []
         self._event_index: int = 0
         self._playhead_frame: int = 0
         self._voices: list[ActiveVoice] = []
         self._is_playing: bool = False
+        self._status_message: str | None = None
+        self._last_stop_reason: str | None = None
 
     @property
     def is_playing(self) -> bool:
@@ -82,16 +107,55 @@ class RealtimeLooper:
                 f"events={len(self._transport.events)}"
             )
 
+    def transport_snapshot(self) -> TransportStateSnapshot:
+        with self._lock:
+            if self._transport is None:
+                return TransportStateSnapshot(
+                    is_playing=self._is_playing,
+                    mode=None,
+                    loop_length_frames=0,
+                    playhead_frame=0,
+                    loop_progress=0.0,
+                    current_bar_index=None,
+                    current_chain_position=None,
+                    current_chain_bar_index=None,
+                    status_message=self._status_message,
+                    last_stop_reason=self._last_stop_reason,
+                )
+
+            loop_length = max(1, self._transport.loop_frames)
+            playhead = min(max(self._playhead_frame, 0), loop_length - 1)
+            progress = playhead / loop_length
+            current_segment = self._segment_for_frame_locked(playhead)
+
+            current_bar_index = current_segment.source_bar_index if current_segment is not None else None
+            current_chain_position = current_segment.chain_position if current_segment is not None else None
+            current_chain_bar_index = current_segment.source_bar_index if current_segment is not None else None
+
+            return TransportStateSnapshot(
+                is_playing=self._is_playing,
+                mode=self._transport.mode,
+                loop_length_frames=self._transport.loop_frames,
+                playhead_frame=playhead,
+                loop_progress=max(0.0, min(1.0, progress)),
+                current_bar_index=current_bar_index,
+                current_chain_position=current_chain_position,
+                current_chain_bar_index=current_chain_bar_index,
+                status_message=self._status_message,
+                last_stop_reason=self._last_stop_reason,
+            )
+
     def set_bar_loop(self, bar: Bar, bpm: float | None = None) -> None:
         with self._lock:
             bpm_value = self._bpm if bpm is None else float(bpm)
-            self._transport = self._prepare_sequence_transport_locked(
+            self._transport, self._segments = self._prepare_sequence_transport_locked(
                 mode="bar",
                 bars=[bar],
                 source_indices=[0],
                 bpm=bpm_value,
             )
             self._reset_playback_state_locked()
+            self._status_message = "Bar loop prepared."
 
     def set_pattern_loop(self, pattern: Pattern, bpm: float | None = None) -> None:
         with self._lock:
@@ -99,13 +163,14 @@ class RealtimeLooper:
                 raise ValueError("Cannot prepare realtime pattern loop: pattern has no bars.")
             bpm_value = self._bpm if bpm is None else float(bpm)
             order = list(range(len(pattern.bars)))
-            self._transport = self._prepare_sequence_transport_locked(
+            self._transport, self._segments = self._prepare_sequence_transport_locked(
                 mode="pattern",
                 bars=pattern.bars,
                 source_indices=order,
                 bpm=bpm_value,
             )
             self._reset_playback_state_locked()
+            self._status_message = "Pattern loop prepared."
 
     def set_chain_loop(self, pattern: Pattern, bpm: float | None = None) -> None:
         with self._lock:
@@ -121,13 +186,14 @@ class RealtimeLooper:
 
             bpm_value = self._bpm if bpm is None else float(bpm)
             bars = [pattern.bars[index] for index in order]
-            self._transport = self._prepare_sequence_transport_locked(
+            self._transport, self._segments = self._prepare_sequence_transport_locked(
                 mode="chain",
                 bars=bars,
                 source_indices=order,
                 bpm=bpm_value,
             )
             self._reset_playback_state_locked()
+            self._status_message = "Chain loop prepared."
 
     def start(self) -> None:
         sample_rate = self._sample_library.sample_rate
@@ -139,15 +205,20 @@ class RealtimeLooper:
             if self._transport is None:
                 raise ValueError("Cannot start realtime playback: no prepared transport.")
             self._is_playing = True
+            self._status_message = "Playback running."
+            self._last_stop_reason = None
 
         assert self._stream is not None
         if not self._stream.active:
             self._stream.start()
 
-    def stop(self) -> None:
+    def stop(self, reason: str | None = None) -> None:
         with self._lock:
             self._is_playing = False
             self._reset_playback_state_locked()
+            resolved_reason = reason or "stopped by user action"
+            self._last_stop_reason = resolved_reason
+            self._status_message = f"Stopped: {resolved_reason}."
 
     def shutdown(self) -> None:
         self.stop()
@@ -186,7 +257,7 @@ class RealtimeLooper:
         bars: list[Bar],
         source_indices: list[int],
         bpm: float,
-    ) -> PreparedLoopTransport:
+    ) -> tuple[PreparedLoopTransport, list[TransportSegment]]:
         sample_rate = self._sample_library.sample_rate
         if sample_rate is None:
             raise ValueError("Cannot prepare realtime transport: no samples loaded.")
@@ -196,14 +267,24 @@ class RealtimeLooper:
         self._channels = self._sample_library.output_channels()
 
         events: list[PreparedTriggerEvent] = []
+        segments: list[TransportSegment] = []
         bar_start = 0
         for chain_position, (source_bar_index, bar) in enumerate(zip(source_indices, bars)):
             bar_frames = self._bar_frame_count(bar, bpm, sample_rate)
+            segment_chain_position = None if mode == "bar" else chain_position
+            segments.append(
+                TransportSegment(
+                    start_frame=bar_start,
+                    end_frame=bar_start + bar_frames,
+                    source_bar_index=source_bar_index,
+                    chain_position=segment_chain_position,
+                )
+            )
             events.extend(
                 self._prepare_events_for_bar(
                     bar=bar,
                     source_bar_index=source_bar_index,
-                    chain_position=(None if mode == "bar" else chain_position),
+                    chain_position=segment_chain_position,
                     bar_start_frame=bar_start,
                     bar_frames=bar_frames,
                 )
@@ -211,7 +292,7 @@ class RealtimeLooper:
             bar_start += bar_frames
 
         events.sort(key=lambda e: e.trigger_frame)
-        return PreparedLoopTransport(mode=mode, loop_frames=max(1, bar_start), events=events)
+        return PreparedLoopTransport(mode=mode, loop_frames=max(1, bar_start), events=events), segments
 
     def _prepare_events_for_bar(
         self,
@@ -259,6 +340,14 @@ class RealtimeLooper:
         bar_seconds = bar_duration_seconds(bar.time_signature, bpm)
         return max(1, int(round(bar_seconds * sample_rate)))
 
+    def _segment_for_frame_locked(self, frame: int) -> TransportSegment | None:
+        if not self._segments:
+            return None
+        for segment in self._segments:
+            if segment.start_frame <= frame < segment.end_frame:
+                return segment
+        return self._segments[-1]
+
     def _trigger_events_in_span_locked(self, start_frame: int, end_frame: int) -> None:
         assert self._transport is not None
         while self._event_index < len(self._transport.events):
@@ -295,7 +384,8 @@ class RealtimeLooper:
         outdata.fill(0.0)
 
         if status:
-            pass
+            with self._lock:
+                self._status_message = f"Audio callback status: {status}"
 
         with self._lock:
             if not self._is_playing or self._transport is None:

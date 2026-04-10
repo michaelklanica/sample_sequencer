@@ -1,6 +1,6 @@
-# Sample Sequencer — Phase 8 Chain-Aware Real-Time Transport
+# Sample Sequencer — Phase 9 Transport Visibility and Usability
 
-Phase 8 extends callback-driven **real-time transport** with explicit chain playback so realtime behavior can match offline chain export semantics when desired.
+Phase 9 adds lightweight, always-visible **transport feedback** in the Textual TUI so you can see what is playing, in which mode, and where playback is within the active loop.
 
 ## What this phase implements
 
@@ -22,6 +22,13 @@ Phase 8 extends callback-driven **real-time transport** with explicit chain play
   - current-bar real-time loop playback toggle (`space`)
   - full-pattern real-time loop playback toggle (`P`)
   - chain real-time loop playback toggle (`C`)
+  - a dedicated transport panel showing:
+    - playback state (`PLAYING` / `STOPPED`)
+    - active mode (`BAR LOOP` / `PATTERN LOOP` / `CHAIN LOOP`)
+    - loop progress (ASCII progress bar + percentage)
+    - active bar during pattern loop
+    - active chain step + source bar during chain loop
+    - most recent stop reason
 - Offline rendering supports:
   - rendering all bars in natural order
   - rendering explicit chained order (e.g. `[0, 1, 0, 2]`)
@@ -37,6 +44,8 @@ Phase 8 extends callback-driven **real-time transport** with explicit chain play
   - safe wraparound trigger scheduling at loop boundaries
   - stopping playback automatically when the active bar changes (bar-loop mode)
   - stopping playback automatically when pattern structure changes
+  - read-only transport snapshots for UI polling
+  - segment-aware position reporting for pattern and chain loops
 - JSON format now supports:
   - `bars` as a non-empty list
   - optional `playback_order` with validation
@@ -49,9 +58,11 @@ Phase 8 extends callback-driven **real-time transport** with explicit chain play
 
 ## Current limitations (intentional)
 
-- No live playhead visualization in the TUI
+- Transport playhead/progress is high-level and approximate (not a sample-accurate visual editor)
+- No event-level highlighting in the rhythm tree during playback
 - No realtime hot-reload while editing
 - No arranger/song timeline yet
+- Edits that change bar selection, structure, or playback order still stop realtime playback automatically
 - `pitch_offset` is metadata-only in this phase:
   - stored on leaf events
   - loaded from JSON and editable in TUI
@@ -166,6 +177,32 @@ Validation rules:
 - `E`: export each bar WAV to `exports/`
 - `R`: refresh tree/panels
 - `q`: quit
+
+## Transport panel semantics
+
+When stopped:
+
+- `State: STOPPED`
+- `Mode: —`
+- `Position: —`
+
+When bar loop is active:
+
+- mode is `BAR LOOP`
+- progress shows position through the currently selected bar loop
+
+When natural pattern loop is active:
+
+- mode is `PATTERN LOOP`
+- progress shows position through the full pattern loop
+- `Bar: X of N` shows which bar segment is currently active
+
+When chain loop is active:
+
+- mode is `CHAIN LOOP`
+- progress shows position through the full chain loop
+- `Chain Step: X of N` shows active playback-order position
+- `Bar Ref: Y` shows the source bar index for that chain segment
 
 ## Exporting Audio
 

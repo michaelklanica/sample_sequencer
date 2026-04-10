@@ -9,6 +9,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Input, Static, Tree
 
+from audio.export import export_bars, export_pattern
 from audio.playback import play_once
 from audio.renderer import OfflineRenderer
 from audio.sample_library import MAX_SLOTS, SampleLibrary
@@ -51,6 +52,8 @@ class PromptScreen(ModalScreen[str | None]):
 
 
 class SequencerTUI(App[None]):
+    DEFAULT_EXPORT_DIR = Path("exports")
+
     CSS = """
     Screen { layout: vertical; }
     #main_row { height: 1fr; }
@@ -81,6 +84,8 @@ class SequencerTUI(App[None]):
         Binding("v", "set_velocity", "Set Velocity"),
         Binding("p", "play_pattern", "Play Pattern"),
         Binding("b", "play_bar", "Play Bar"),
+        Binding("e", "export_pattern", "Export Pattern WAV"),
+        Binding("E", "export_bars", "Export Bars WAV"),
         Binding("m", "toggle_rest", "Toggle Rest"),
         Binding("t", "set_pitch_offset", "Set Pitch"),
         Binding("y", "copy_subtree", "Copy"),
@@ -215,7 +220,7 @@ class SequencerTUI(App[None]):
             f"Loaded slots: {self._samples_summary()}",
             (
                 "Keys: 2-6 split | s slot | v vel | t pitch | m rest | y copy | u paste | r reset | "
-                "o order | p pattern | b bar | a/d/x bars | [/] switch | q quit"
+                "o order | p pattern | b bar | e export | E bars export | a/d/x bars | [/] switch | q quit"
             ),
         ]
         info_lines.extend(self.status_lines[-5:])
@@ -466,6 +471,42 @@ class SequencerTUI(App[None]):
     def action_play_bar(self) -> None:
         bar = self.pattern.bars[self.current_bar_index]
         self._render_and_play_pattern(Pattern(bars=[bar]), f"Played bar {self.current_bar_index}")
+
+    def action_export_pattern(self) -> None:
+        setattr(self.pattern, "bpm", self.bpm)
+        export_dir = self.DEFAULT_EXPORT_DIR
+        prefix = self.pattern_name or "pattern"
+        try:
+            exported = export_pattern(
+                self.pattern,
+                self.sample_library,
+                output_path=str(export_dir),
+                filename_prefix=prefix,
+                sample_rate=int(round(self.sample_library.sample_rate or 44100)),
+                normalize=True,
+            )
+            self._push_status(f"Exported full pattern → {exported}")
+        except Exception as exc:
+            self._push_status(f"Export failed: {exc}")
+        self._refresh_panels()
+
+    def action_export_bars(self) -> None:
+        setattr(self.pattern, "bpm", self.bpm)
+        export_dir = self.DEFAULT_EXPORT_DIR
+        prefix = self.pattern_name or "pattern"
+        try:
+            exported = export_bars(
+                self.pattern,
+                self.sample_library,
+                output_dir=str(export_dir),
+                filename_prefix=prefix,
+                sample_rate=int(round(self.sample_library.sample_rate or 44100)),
+                normalize=True,
+            )
+            self._push_status(f"Exported {len(exported)} bars → {export_dir}/")
+        except Exception as exc:
+            self._push_status(f"Bar export failed: {exc}")
+        self._refresh_panels()
 
     def _render_and_play_pattern(self, pattern: Pattern, label: str) -> None:
         if self.sample_library.sample_rate is None:

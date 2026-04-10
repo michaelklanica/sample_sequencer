@@ -111,14 +111,14 @@ class SequencerTUI(App[None]):
         yield Header(show_clock=False)
         yield Horizontal(
             Vertical(
-                Static("", id="bar_list_panel"),
+                Static("", id="bar_list_panel", markup=False),
                 Tree("Bar 0", id="tree_panel"),
                 id="left_panel",
             ),
-            Vertical(Static("", id="inspector_panel"), id="right_panel"),
+            Vertical(Static("", id="inspector_panel", markup=False), id="right_panel"),
             id="main_row",
         )
-        yield Static("", id="status_panel")
+        yield Static("", id="status_panel", markup=False)
         yield Footer()
 
     def on_mount(self) -> None:

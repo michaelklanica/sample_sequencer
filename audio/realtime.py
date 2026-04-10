@@ -16,6 +16,7 @@ from engine.timing import bar_duration_seconds
 class PreparedTriggerEvent:
     trigger_frame: int
     source_bar_index: int
+    chain_position: int | None
     sample_slot: int
     velocity: float
     audio: np.ndarray
@@ -23,7 +24,7 @@ class PreparedTriggerEvent:
 
 @dataclass(frozen=True)
 class PreparedLoopTransport:
-    mode: Literal["bar", "pattern"]
+    mode: Literal["bar", "pattern", "chain"]
     loop_frames: int
     events: list[PreparedTriggerEvent]
 
@@ -36,7 +37,7 @@ class ActiveVoice:
 
 
 class RealtimeLooper:
-    """Callback-driven looping playback for a bar loop or full-pattern loop."""
+    """Callback-driven looping playback for bar, pattern, or chain loop transports."""
 
     def __init__(self, sample_library: SampleLibrary, bpm: float, headroom_gain: float = 0.8) -> None:
         if bpm <= 0:
@@ -65,22 +66,67 @@ class RealtimeLooper:
             return self._is_playing
 
     @property
-    def mode(self) -> Literal["bar", "pattern"] | None:
+    def mode(self) -> Literal["bar", "pattern", "chain"] | None:
         with self._lock:
             if self._transport is None:
                 return None
             return self._transport.mode
 
+    def describe_transport(self) -> str:
+        with self._lock:
+            if self._transport is None:
+                return "No realtime transport prepared."
+            return (
+                f"mode={self._transport.mode} "
+                f"loop_frames={self._transport.loop_frames} "
+                f"events={len(self._transport.events)}"
+            )
+
     def set_bar_loop(self, bar: Bar, bpm: float | None = None) -> None:
         with self._lock:
             bpm_value = self._bpm if bpm is None else float(bpm)
-            self._transport = self._prepare_bar_transport_locked(bar, bpm_value)
+            self._transport = self._prepare_sequence_transport_locked(
+                mode="bar",
+                bars=[bar],
+                source_indices=[0],
+                bpm=bpm_value,
+            )
             self._reset_playback_state_locked()
 
     def set_pattern_loop(self, pattern: Pattern, bpm: float | None = None) -> None:
         with self._lock:
+            if len(pattern.bars) == 0:
+                raise ValueError("Cannot prepare realtime pattern loop: pattern has no bars.")
             bpm_value = self._bpm if bpm is None else float(bpm)
-            self._transport = self._prepare_pattern_transport_locked(pattern, bpm_value)
+            order = list(range(len(pattern.bars)))
+            self._transport = self._prepare_sequence_transport_locked(
+                mode="pattern",
+                bars=pattern.bars,
+                source_indices=order,
+                bpm=bpm_value,
+            )
+            self._reset_playback_state_locked()
+
+    def set_chain_loop(self, pattern: Pattern, bpm: float | None = None) -> None:
+        with self._lock:
+            order = pattern.playback_order
+            if order is None:
+                raise ValueError("Cannot start chain loop: no playback order defined.")
+            if len(order) == 0:
+                raise ValueError("Cannot start chain loop: no playback order defined.")
+            try:
+                Pattern.validate_playback_order(order, len(pattern.bars))
+            except ValueError as exc:
+                raise ValueError("Cannot start chain loop: invalid playback order.") from exc
+
+            bpm_value = self._bpm if bpm is None else float(bpm)
+            bars = [pattern.bars[index] for index in order]
+            self._transport = self._prepare_sequence_transport_locked(
+                mode="chain",
+                bars=bars,
+                source_indices=order,
+                bpm=bpm_value,
+            )
             self._reset_playback_state_locked()
 
     def start(self) -> None:
@@ -133,49 +179,51 @@ class RealtimeLooper:
         self._playhead_frame = 0
         self._voices.clear()
 
-    def _prepare_bar_transport_locked(self, bar: Bar, bpm: float) -> PreparedLoopTransport:
+    def _prepare_sequence_transport_locked(
+        self,
+        *,
+        mode: Literal["bar", "pattern", "chain"],
+        bars: list[Bar],
+        source_indices: list[int],
+        bpm: float,
+    ) -> PreparedLoopTransport:
         sample_rate = self._sample_library.sample_rate
         if sample_rate is None:
             raise ValueError("Cannot prepare realtime transport: no samples loaded.")
+        if len(bars) == 0:
+            raise ValueError("Cannot prepare realtime transport: no bars.")
 
         self._channels = self._sample_library.output_channels()
-        bar_frames = self._bar_frame_count(bar, bpm, sample_rate)
-        events = self._prepare_events_for_bar(bar=bar, bar_index=0, bar_start_frame=0, bar_frames=bar_frames)
-        return PreparedLoopTransport(mode="bar", loop_frames=bar_frames, events=events)
-
-    def _prepare_pattern_transport_locked(self, pattern: Pattern, bpm: float) -> PreparedLoopTransport:
-        if len(pattern.bars) == 0:
-            raise ValueError("Cannot prepare realtime pattern loop: pattern has no bars.")
-
-        sample_rate = self._sample_library.sample_rate
-        if sample_rate is None:
-            raise ValueError("Cannot prepare realtime transport: no samples loaded.")
-
-        self._channels = self._sample_library.output_channels()
-        bar_frames = [self._bar_frame_count(bar, bpm, sample_rate) for bar in pattern.bars]
 
         events: list[PreparedTriggerEvent] = []
         bar_start = 0
-        for bar_index, (bar, frames) in enumerate(zip(pattern.bars, bar_frames)):
+        for chain_position, (source_bar_index, bar) in enumerate(zip(source_indices, bars)):
+            bar_frames = self._bar_frame_count(bar, bpm, sample_rate)
             events.extend(
-                self._prepare_events_for_bar(bar=bar, bar_index=bar_index, bar_start_frame=bar_start, bar_frames=frames)
+                self._prepare_events_for_bar(
+                    bar=bar,
+                    source_bar_index=source_bar_index,
+                    chain_position=(None if mode == "bar" else chain_position),
+                    bar_start_frame=bar_start,
+                    bar_frames=bar_frames,
+                )
             )
-            bar_start += frames
+            bar_start += bar_frames
 
         events.sort(key=lambda e: e.trigger_frame)
-        loop_frames = max(1, sum(bar_frames))
-        return PreparedLoopTransport(mode="pattern", loop_frames=loop_frames, events=events)
+        return PreparedLoopTransport(mode=mode, loop_frames=max(1, bar_start), events=events)
 
     def _prepare_events_for_bar(
         self,
         *,
         bar: Bar,
-        bar_index: int,
+        source_bar_index: int,
+        chain_position: int | None,
         bar_start_frame: int,
         bar_frames: int,
     ) -> list[PreparedTriggerEvent]:
         events: list[PreparedTriggerEvent] = []
-        for event in bar.flatten_events(bar_index=bar_index):
+        for event in bar.flatten_events(bar_index=source_bar_index):
             if event.sample_slot is None:
                 continue
             try:
@@ -196,7 +244,8 @@ class RealtimeLooper:
             events.append(
                 PreparedTriggerEvent(
                     trigger_frame=trigger_frame,
-                    source_bar_index=bar_index,
+                    source_bar_index=source_bar_index,
+                    chain_position=chain_position,
                     sample_slot=event.sample_slot,
                     velocity=float(event.velocity),
                     audio=audio,
@@ -242,30 +291,38 @@ class RealtimeLooper:
 
         self._voices = next_voices
 
-    def _audio_callback(self, outdata: np.ndarray, frames: int, _time: sd.CallbackFlags, _status: sd.CallbackFlags) -> None:
+    def _audio_callback(self, outdata: np.ndarray, frames: int, _time: sd.CallbackFlags, status: sd.CallbackFlags) -> None:
         outdata.fill(0.0)
 
+        if status:
+            pass
+
         with self._lock:
-            if not self._is_playing or self._transport is None or self._transport.loop_frames <= 0:
+            if not self._is_playing or self._transport is None:
                 return
 
             loop_frames = self._transport.loop_frames
-            remaining = frames
-            span_start = self._playhead_frame
-            while remaining > 0:
-                span = min(loop_frames - span_start, remaining)
-                span_end = span_start + span
+            if loop_frames <= 0:
+                return
 
-                self._trigger_events_in_span_locked(span_start, span_end)
-                remaining -= span
-                span_start = span_end
+            callback_start = self._playhead_frame
+            callback_end = callback_start + frames
 
-                if span_start >= loop_frames:
-                    span_start = 0
-                    self._event_index = 0
+            if callback_end <= loop_frames:
+                self._trigger_events_in_span_locked(callback_start, callback_end)
+            else:
+                self._trigger_events_in_span_locked(callback_start, loop_frames)
+                self._event_index = 0
+                self._trigger_events_in_span_locked(0, callback_end - loop_frames)
 
             self._mix_voices_locked(outdata)
-            self._playhead_frame = (self._playhead_frame + frames) % loop_frames
 
+            self._playhead_frame = callback_end % loop_frames
+            if callback_end >= loop_frames:
+                self._event_index = 0
+                while self._event_index < len(self._transport.events):
+                    if self._transport.events[self._event_index].trigger_frame >= self._playhead_frame:
+                        break
+                    self._event_index += 1
 
-RealtimeBarLooper = RealtimeLooper
+        np.clip(outdata, -1.0, 1.0, out=outdata)

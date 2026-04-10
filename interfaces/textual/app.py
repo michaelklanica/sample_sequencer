@@ -87,6 +87,7 @@ class SequencerTUI(App[None]):
         Binding("b", "play_bar", "Play Bar"),
         Binding("space", "toggle_realtime_bar_playback", "Loop Current Bar"),
         Binding("P", "toggle_realtime_pattern_playback", "Loop Full Pattern"),
+        Binding("C", "toggle_realtime_chain_playback", "Loop Chain"),
         Binding("e", "export_pattern", "Export Pattern WAV"),
         Binding("E", "export_bars", "Export Bars WAV"),
         Binding("m", "toggle_rest", "Toggle Rest"),
@@ -230,7 +231,7 @@ class SequencerTUI(App[None]):
             f" ({self.realtime_looper.mode or 'none'})",
             (
                 "Keys: 2-6 split | s slot | v vel | t pitch | m rest | y copy | u paste | r reset | "
-                "o order | p pattern | b bar | space bar-loop | P pattern-loop | e export | E bars export | "
+                "o order | p pattern | b bar | space bar-loop | P pattern-loop | C chain-loop | e export | E bars export | "
                 "a/d/x bars | [/] switch | q quit"
             ),
         ]
@@ -463,7 +464,7 @@ class SequencerTUI(App[None]):
         self._refresh_panels()
 
     def action_edit_playback_order(self) -> None:
-        self._stop_realtime_for_structure_change()
+        self._stop_realtime_for_playback_order_change()
         current = self.pattern.resolved_playback_order()
 
         def handle(value: str | None) -> None:
@@ -547,9 +548,49 @@ class SequencerTUI(App[None]):
         try:
             self.realtime_looper.set_pattern_loop(self.pattern, bpm=self.bpm)
             self.realtime_looper.start()
-            self._push_status("Started realtime pattern loop (natural bar order).")
+            self._push_status("Realtime pattern loop started (natural bar order).")
         except Exception as exc:
             self._push_status(f"Cannot start realtime pattern loop: {exc}")
+        self._refresh_panels()
+
+
+    def action_toggle_realtime_chain_playback(self) -> None:
+        if self.realtime_looper.is_playing and self.realtime_looper.mode == "chain":
+            self.realtime_looper.stop()
+            self._push_status("Realtime chain loop stopped.")
+            self._refresh_panels()
+            return
+
+        if self.sample_library.sample_rate is None:
+            self._push_status("Cannot start chain loop: no samples loaded.")
+            self._refresh_panels()
+            return
+
+        if self.pattern.playback_order is None or len(self.pattern.playback_order) == 0:
+            self._push_status("Cannot start chain loop: no playback order defined.")
+            self._refresh_panels()
+            return
+
+        try:
+            Pattern.validate_playback_order(self.pattern.playback_order, len(self.pattern.bars))
+        except ValueError:
+            self._push_status("Cannot start chain loop: invalid playback order.")
+            self._refresh_panels()
+            return
+
+        if self.realtime_looper.is_playing:
+            self.realtime_looper.stop()
+
+        try:
+            self.realtime_looper.set_chain_loop(self.pattern, bpm=self.bpm)
+            self.realtime_looper.start()
+            self._push_status("Realtime chain loop started.")
+            self._push_status(
+                "Chain debug: order="
+                f"{self.pattern.playback_order} | {self.realtime_looper.describe_transport()}"
+            )
+        except Exception as exc:
+            self._push_status(f"Cannot start realtime chain loop: {exc}")
         self._refresh_panels()
 
     def action_export_pattern(self) -> None:
@@ -618,6 +659,11 @@ class SequencerTUI(App[None]):
         if self.realtime_looper.is_playing:
             self.realtime_looper.stop()
             self._push_status("Stopped realtime playback because pattern structure changed.")
+
+    def _stop_realtime_for_playback_order_change(self) -> None:
+        if self.realtime_looper.is_playing:
+            self.realtime_looper.stop()
+            self._push_status("Stopped realtime playback because playback order changed.")
 
 
 def _load_demo_library() -> SampleLibrary:

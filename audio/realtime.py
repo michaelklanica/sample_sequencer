@@ -9,6 +9,7 @@ import sounddevice as sd
 
 from audio.sample_library import SampleLibrary
 from engine.pattern import Bar, Pattern
+from engine.rhythm_tree import RhythmNode
 from engine.timing import bar_duration_seconds
 
 
@@ -17,9 +18,7 @@ class PreparedTriggerEvent:
     trigger_frame: int
     source_bar_index: int
     chain_position: int | None
-    sample_slot: int
-    velocity: float
-    audio: np.ndarray
+    leaf: RhythmNode
 
 
 @dataclass(frozen=True)
@@ -304,21 +303,11 @@ class RealtimeLooper:
         bar_frames: int,
     ) -> list[PreparedTriggerEvent]:
         events: list[PreparedTriggerEvent] = []
-        for event in bar.flatten_events(bar_index=source_bar_index):
-            if event.sample_slot is None:
-                continue
-            try:
-                sample = self._sample_library.get(event.sample_slot)
-            except ValueError:
+        for leaf in bar.root.iter_leaves():
+            if leaf.sample_slot is None:
                 continue
 
-            audio = sample.audio
-            if audio.shape[1] == 1 and self._channels == 2:
-                audio = np.repeat(audio, repeats=2, axis=1)
-            elif audio.shape[1] == 2 and self._channels == 1:
-                audio = audio.mean(axis=1, keepdims=True)
-
-            trigger_frame_local = int(round(event.start_fraction * bar_frames))
+            trigger_frame_local = int(round(leaf.start_fraction * bar_frames))
             trigger_frame_local = max(0, min(bar_frames - 1, trigger_frame_local))
             trigger_frame = bar_start_frame + trigger_frame_local
 
@@ -327,9 +316,7 @@ class RealtimeLooper:
                     trigger_frame=trigger_frame,
                     source_bar_index=source_bar_index,
                     chain_position=chain_position,
-                    sample_slot=event.sample_slot,
-                    velocity=float(event.velocity),
-                    audio=audio,
+                    leaf=leaf,
                 )
             )
 
@@ -355,8 +342,29 @@ class RealtimeLooper:
             if event.trigger_frame >= end_frame:
                 break
             if event.trigger_frame >= start_frame:
-                self._voices.append(ActiveVoice(audio=event.audio, frame_position=0, gain=event.velocity * self._headroom_gain))
+                maybe_voice = self._voice_for_prepared_event_locked(event)
+                if maybe_voice is not None:
+                    self._voices.append(maybe_voice)
             self._event_index += 1
+
+    def _voice_for_prepared_event_locked(self, event: PreparedTriggerEvent) -> ActiveVoice | None:
+        slot = event.leaf.sample_slot
+        if slot is None:
+            return None
+
+        try:
+            sample = self._sample_library.get(slot)
+        except ValueError:
+            return None
+
+        audio = sample.audio
+        if audio.shape[1] == 1 and self._channels == 2:
+            audio = np.repeat(audio, repeats=2, axis=1)
+        elif audio.shape[1] == 2 and self._channels == 1:
+            audio = audio.mean(axis=1, keepdims=True)
+
+        gain = float(event.leaf.velocity) * self._headroom_gain
+        return ActiveVoice(audio=audio, frame_position=0, gain=gain)
 
     def _mix_voices_locked(self, outdata: np.ndarray) -> None:
         if not self._voices:

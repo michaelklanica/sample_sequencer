@@ -1,6 +1,6 @@
-# Sample Sequencer — Phase 9 Transport Visibility and Usability
+# Sample Sequencer — Phase 10 Live-Safe Editing During Real-Time Playback
 
-Phase 9 adds lightweight, always-visible **transport feedback** in the Textual TUI so you can see what is playing, in which mode, and where playback is within the active loop.
+Phase 10 adds an explicit **live-safe editing policy** for the Textual TUI during realtime playback, so you can clearly tell which edits continue playback and which edits intentionally stop transport.
 
 ## What this phase implements
 
@@ -42,8 +42,11 @@ Phase 9 adds lightweight, always-visible **transport feedback** in the Textual T
   - mixed time signatures across chain segments are handled by per-segment frame lengths
   - overlapping sample voices
   - safe wraparound trigger scheduling at loop boundaries
-  - stopping playback automatically when the active bar changes (bar-loop mode)
-  - stopping playback automatically when pattern structure changes
+  - centralized edit classification (`live_safe` vs `transport_invalidating`)
+  - live-safe leaf parameter edits during playback (`velocity`, `sample_slot`, `pitch_offset`, rest toggle)
+  - applying leaf parameters at trigger time so future triggers use updated values
+  - already-started voices continue unchanged after live-safe edits
+  - stopping playback automatically for transport-invalidating edits
   - read-only transport snapshots for UI polling
   - segment-aware position reporting for pattern and chain loops
 - JSON format now supports:
@@ -60,9 +63,9 @@ Phase 9 adds lightweight, always-visible **transport feedback** in the Textual T
 
 - Transport playhead/progress is high-level and approximate (not a sample-accurate visual editor)
 - No event-level highlighting in the rhythm tree during playback
-- No realtime hot-reload while editing
+- No hot rebuild of timeline for structural edits while playing
 - No arranger/song timeline yet
-- Edits that change bar selection, structure, or playback order still stop realtime playback automatically
+- Structural and timing edits still stop realtime playback automatically
 - `pitch_offset` is metadata-only in this phase:
   - stored on leaf events
   - loaded from JSON and editable in TUI
@@ -203,6 +206,37 @@ When chain loop is active:
 - progress shows position through the full chain loop
 - `Chain Step: X of N` shows active playback-order position
 - `Bar Ref: Y` shows the source bar index for that chain segment
+
+The panel also shows:
+
+- `Live-safe edits: ON (velocity/slot/pitch/rest)`
+
+## Editing During Real-Time Playback
+
+### Live-safe edits (playback continues)
+
+These edits do **not** stop realtime playback:
+
+- leaf velocity (`v`)
+- leaf sample slot reassignment / clear (`s`)
+- leaf pitch offset metadata (`t`)
+- leaf rest toggle (`m`, implemented as `sample_slot=None`)
+- node selection and other non-transport UI interactions
+
+Behavior: the next trigger reads current leaf values (slot/velocity/pitch metadata). Already-triggered voices are not retroactively modified.
+
+### Transport-invalidating edits (playback auto-stops)
+
+These edits stop realtime playback with a reason message before applying:
+
+- split selected node (`2..6`)
+- reset subtree (`r`)
+- paste subtree (`u`)
+- playback order changes (`o`)
+- add / duplicate / delete bar (`a`, `d`, `x`)
+- changing selected bar while **bar-loop mode** is active (`[`, `]`)
+
+These edits can change structure/timing/loop length/bar count/chain structure, so transport is invalidated conservatively.
 
 ## Exporting Audio
 

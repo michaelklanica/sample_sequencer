@@ -11,6 +11,7 @@ from textual.widgets import Footer, Header, Input, Static, Tree
 
 from audio.export import export_bars, export_pattern
 from audio.playback import play_once
+from audio.realtime import RealtimeBarLooper
 from audio.renderer import OfflineRenderer
 from audio.sample_library import MAX_SLOTS, SampleLibrary
 from engine.pattern import Bar, Pattern
@@ -84,6 +85,7 @@ class SequencerTUI(App[None]):
         Binding("v", "set_velocity", "Set Velocity"),
         Binding("p", "play_pattern", "Play Pattern"),
         Binding("b", "play_bar", "Play Bar"),
+        Binding("space", "toggle_realtime_playback", "Realtime Play/Stop"),
         Binding("e", "export_pattern", "Export Pattern WAV"),
         Binding("E", "export_bars", "Export Bars WAV"),
         Binding("m", "toggle_rest", "Toggle Rest"),
@@ -111,6 +113,7 @@ class SequencerTUI(App[None]):
         self.node_map: dict[str, RhythmNode] = {}
         self.status_lines: list[str] = []
         self.subtree_clipboard: RhythmNode | None = None
+        self.realtime_looper = RealtimeBarLooper(sample_library=sample_library, bpm=bpm)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -127,9 +130,13 @@ class SequencerTUI(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.realtime_looper.set_bar(self.pattern.bars[self.current_bar_index])
         self._rebuild_tree()
         self._push_status("Ready. Use [ ] to switch bars and arrows to navigate nodes.")
         self._refresh_panels()
+
+    def on_unmount(self) -> None:
+        self.realtime_looper.shutdown()
 
     def _bar_root(self) -> RhythmNode:
         return self.pattern.bars[self.current_bar_index].root
@@ -218,9 +225,11 @@ class SequencerTUI(App[None]):
         info_lines = [
             f"Pattern: {self.pattern_name} | BPM: {self.bpm}",
             f"Loaded slots: {self._samples_summary()}",
+            f"Realtime: {'playing' if self.realtime_looper.is_playing else 'stopped'}",
             (
                 "Keys: 2-6 split | s slot | v vel | t pitch | m rest | y copy | u paste | r reset | "
-                "o order | p pattern | b bar | e export | E bars export | a/d/x bars | [/] switch | q quit"
+                "o order | p pattern | b bar | space realtime | e export | E bars export | "
+                "a/d/x bars | [/] switch | q quit"
             ),
         ]
         info_lines.extend(self.status_lines[-5:])
@@ -240,20 +249,25 @@ class SequencerTUI(App[None]):
         self._refresh_panels()
 
     def action_prev_bar(self) -> None:
+        self._stop_realtime_for_bar_change()
         self.current_bar_index = (self.current_bar_index - 1) % len(self.pattern.bars)
         self.selected_path = "0"
+        self.realtime_looper.set_bar(self.pattern.bars[self.current_bar_index])
         self._rebuild_tree()
         self._push_status(f"Selected bar {self.current_bar_index}.")
         self._refresh_panels()
 
     def action_next_bar(self) -> None:
+        self._stop_realtime_for_bar_change()
         self.current_bar_index = (self.current_bar_index + 1) % len(self.pattern.bars)
         self.selected_path = "0"
+        self.realtime_looper.set_bar(self.pattern.bars[self.current_bar_index])
         self._rebuild_tree()
         self._push_status(f"Selected bar {self.current_bar_index}.")
         self._refresh_panels()
 
     def action_add_bar(self) -> None:
+        self._stop_realtime_for_bar_change()
         if self.pattern.bars:
             ts = self.pattern.bars[self.current_bar_index].time_signature
         else:
@@ -264,22 +278,26 @@ class SequencerTUI(App[None]):
         self.pattern.bars.insert(insert_at, new_bar)
         self.current_bar_index = insert_at
         self.selected_path = "0"
+        self.realtime_looper.set_bar(self.pattern.bars[self.current_bar_index])
         self._rebuild_tree()
         self._push_status(f"Added bar {insert_at} ({new_bar.time_signature.as_text()}).")
         self._refresh_panels()
 
     def action_duplicate_bar(self) -> None:
+        self._stop_realtime_for_bar_change()
         source = self.pattern.bars[self.current_bar_index]
         insert_at = self.current_bar_index + 1
         self.pattern.remap_playback_order_for_insert(insert_at)
         self.pattern.bars.insert(insert_at, source.clone())
         self.current_bar_index = insert_at
         self.selected_path = "0"
+        self.realtime_looper.set_bar(self.pattern.bars[self.current_bar_index])
         self._rebuild_tree()
         self._push_status(f"Duplicated bar {insert_at - 1} into bar {insert_at}.")
         self._refresh_panels()
 
     def action_delete_bar(self) -> None:
+        self._stop_realtime_for_bar_change()
         if len(self.pattern.bars) == 1:
             self._push_status("Delete rejected: pattern must contain at least one bar.")
             self._refresh_panels()
@@ -289,6 +307,7 @@ class SequencerTUI(App[None]):
         self.pattern.remap_playback_order_for_delete(deleted)
         self.current_bar_index = min(self.current_bar_index, len(self.pattern.bars) - 1)
         self.selected_path = "0"
+        self.realtime_looper.set_bar(self.pattern.bars[self.current_bar_index])
         self._rebuild_tree()
         self._push_status(f"Deleted bar {deleted}. Now editing bar {self.current_bar_index}.")
         self._refresh_panels()
@@ -472,6 +491,26 @@ class SequencerTUI(App[None]):
         bar = self.pattern.bars[self.current_bar_index]
         self._render_and_play_pattern(Pattern(bars=[bar]), f"Played bar {self.current_bar_index}")
 
+    def action_toggle_realtime_playback(self) -> None:
+        if self.realtime_looper.is_playing:
+            self.realtime_looper.stop()
+            self._push_status("Realtime playback stopped.")
+            self._refresh_panels()
+            return
+
+        if self.sample_library.sample_rate is None:
+            self._push_status("Cannot start realtime playback: no samples loaded.")
+            self._refresh_panels()
+            return
+
+        self.realtime_looper.set_bar(self.pattern.bars[self.current_bar_index])
+        try:
+            self.realtime_looper.start()
+            self._push_status(f"Realtime playback started for bar {self.current_bar_index}.")
+        except Exception as exc:
+            self._push_status(f"Cannot start realtime playback: {exc}")
+        self._refresh_panels()
+
     def action_export_pattern(self) -> None:
         setattr(self.pattern, "bpm", self.bpm)
         export_dir = self.DEFAULT_EXPORT_DIR
@@ -509,6 +548,10 @@ class SequencerTUI(App[None]):
         self._refresh_panels()
 
     def _render_and_play_pattern(self, pattern: Pattern, label: str) -> None:
+        if self.realtime_looper.is_playing:
+            self.realtime_looper.stop()
+            self._push_status("Realtime playback stopped before one-shot playback.")
+
         if self.sample_library.sample_rate is None:
             self._push_status("Playback unavailable: no samples loaded.")
             self._refresh_panels()
@@ -524,6 +567,11 @@ class SequencerTUI(App[None]):
         except Exception as exc:  # runtime audio/render errors should be non-fatal to UI
             self._push_status(f"Render/play failed: {exc}")
         self._refresh_panels()
+
+    def _stop_realtime_for_bar_change(self) -> None:
+        if self.realtime_looper.is_playing:
+            self.realtime_looper.stop()
+            self._push_status("Stopped playback because active bar changed.")
 
 
 def _load_demo_library() -> SampleLibrary:

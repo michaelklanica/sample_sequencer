@@ -1,4 +1,5 @@
 from audio.export import export_bars, export_pattern
+from audio.realtime import RealtimeBarLooper
 from audio.renderer import OfflineRenderer, RenderResult
 from audio.sample_library import MAX_SLOTS, SampleLibrary, SampleData
 
@@ -18,4 +19,5 @@ __all__ = [
     "MAX_SLOTS",
     "SampleLibrary",
     "SampleData",
+    "RealtimeBarLooper",
 ]

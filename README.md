@@ -1,7 +1,7 @@
-# Sample Sequencer — Phase 4 Tracker-Style Tree Editing
+# Sample Sequencer — Phase 6 Real-Time Playback Foundation
 
-Phase 4 keeps the multi-bar offline architecture from earlier phases and adds first practical
-**tracker-style tree editing** operations while keeping engine, audio, and UI layers separated.
+Phase 6 keeps the multi-bar offline architecture and adds the first callback-driven
+**real-time playback foundation** while keeping engine, audio, and UI layers separated.
 
 ## What this phase implements
 
@@ -20,10 +20,17 @@ Phase 4 keeps the multi-bar offline architecture from earlier phases and adds fi
 - TUI now supports:
   - playback order prompt editing
   - leaf pitch offset editing
+  - current-bar real-time loop playback toggle (`space`)
 - Offline rendering supports:
   - rendering all bars in natural order
   - rendering explicit chained order (e.g. `[0, 1, 0, 2]`)
   - bar-duration-aware timeline assembly across mixed time signatures
+- Real-time playback supports:
+  - callback-driven output via `sounddevice`
+  - looping the currently selected bar only
+  - overlapping sample voices
+  - safe wraparound trigger scheduling at bar boundaries
+  - stopping playback automatically when the active bar changes
 - JSON format now supports:
   - `bars` as a non-empty list
   - optional `playback_order` with validation
@@ -36,9 +43,10 @@ Phase 4 keeps the multi-bar offline architecture from earlier phases and adds fi
 
 ## Current limitations (intentional)
 
-- Playback remains offline render + one-shot playback
-- No real-time transport/scheduler yet
-- No loop transport yet
+- Real-time playback currently loops only the selected bar
+- Changing selected bar stops active real-time playback
+- Full-pattern real-time playback is not implemented yet
+- Chain-aware real-time playback is not implemented yet
 - No arranger/song timeline yet
 - `pitch_offset` is metadata-only in this phase:
   - stored on leaf events
@@ -147,6 +155,7 @@ Validation rules:
 - `x`: delete current bar (blocked if it is the last remaining bar)
 - `b`: render + play current bar once
 - `p`: render + play full pattern/chain once
+- `space`: toggle real-time loop playback for current bar
 - `e`: export full pattern WAV to `exports/`
 - `E`: export each bar WAV to `exports/`
 - `R`: refresh tree/panels

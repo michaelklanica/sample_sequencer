@@ -1,7 +1,6 @@
-# Sample Sequencer — Phase 7 Pattern-Level Real-Time Transport
+# Sample Sequencer — Phase 8 Chain-Aware Real-Time Transport
 
-Phase 7 keeps the multi-bar offline architecture and extends callback-driven
-**real-time transport** from current-bar looping to full-pattern looping in natural bar order.
+Phase 8 extends callback-driven **real-time transport** with explicit chain playback so realtime behavior can match offline chain export semantics when desired.
 
 ## What this phase implements
 
@@ -22,6 +21,7 @@ Phase 7 keeps the multi-bar offline architecture and extends callback-driven
   - leaf pitch offset editing
   - current-bar real-time loop playback toggle (`space`)
   - full-pattern real-time loop playback toggle (`P`)
+  - chain real-time loop playback toggle (`C`)
 - Offline rendering supports:
   - rendering all bars in natural order
   - rendering explicit chained order (e.g. `[0, 1, 0, 2]`)
@@ -30,7 +30,9 @@ Phase 7 keeps the multi-bar offline architecture and extends callback-driven
   - callback-driven output via `sounddevice`
   - looping the currently selected bar
   - looping the full pattern in natural bar order (`bar 0 -> 1 -> ... -> last -> 0`)
-  - per-bar duration stitching across mixed time signatures in pattern-loop mode
+  - looping the full pattern using explicit `playback_order` chain mode (`C`)
+  - repeated bars in the chain are scheduled as distinct timeline segments
+  - mixed time signatures across chain segments are handled by per-segment frame lengths
   - overlapping sample voices
   - safe wraparound trigger scheduling at loop boundaries
   - stopping playback automatically when the active bar changes (bar-loop mode)
@@ -47,10 +49,8 @@ Phase 7 keeps the multi-bar offline architecture and extends callback-driven
 
 ## Current limitations (intentional)
 
-- Real-time full-pattern playback uses natural bar order only
-- Chain-aware (`playback_order`) real-time playback is not implemented yet
-- Changing selected bar stops active playback only in bar-loop mode
-- Structural edits may stop active real-time playback for safety
+- No live playhead visualization in the TUI
+- No realtime hot-reload while editing
 - No arranger/song timeline yet
 - `pitch_offset` is metadata-only in this phase:
   - stored on leaf events
@@ -161,6 +161,7 @@ Validation rules:
 - `p`: render + play full pattern/chain once
 - `space`: toggle real-time loop playback for current bar
 - `P`: toggle real-time loop playback for full pattern (natural bar order)
+- `C`: toggle real-time loop playback for explicit playback chain (`playback_order`)
 - `e`: export full pattern WAV to `exports/`
 - `E`: export each bar WAV to `exports/`
 - `R`: refresh tree/panels
@@ -184,6 +185,14 @@ Naming format:
 - Full pattern: `{prefix}_bpm{BPM}.wav` (example: `my_pattern_bpm120.wav`)
 - Per-bar: `{prefix}_bar{index:02d}_{numerator}-{denominator}.wav`
   (example: `my_pattern_bar01_4-4.wav`)
+
+## Chain-loop behavior
+
+- Chain loop uses `playback_order` exactly as defined (including repeated bar indices).
+- If `playback_order` is missing or empty, realtime chain loop refuses to start with a status message.
+- If `playback_order` is invalid, realtime chain loop refuses to start with a status message.
+- The realtime callback remains timeline-based; chain/pattern/bar differences are resolved during transport preparation.
+- Editing pattern structure or playback order while realtime playback is active stops playback immediately.
 
 ## Validation behavior
 

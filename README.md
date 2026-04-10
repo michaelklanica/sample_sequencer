@@ -91,6 +91,13 @@ Textual TUI with JSON pattern:
 python main.py --tui assets/patterns/demo_pattern.json
 ```
 
+CLI WAV export (optional):
+
+```bash
+python main.py --export assets/patterns/demo_pattern.json
+python main.py --export-bars assets/patterns/demo_pattern.json
+```
+
 ## Multi-bar JSON structure
 
 ```json
@@ -140,8 +147,29 @@ Validation rules:
 - `x`: delete current bar (blocked if it is the last remaining bar)
 - `b`: render + play current bar once
 - `p`: render + play full pattern/chain once
+- `e`: export full pattern WAV to `exports/`
+- `E`: export each bar WAV to `exports/`
 - `R`: refresh tree/panels
 - `q`: quit
+
+## Exporting Audio
+
+From the TUI:
+
+- `e` → export full pattern (chain-aware)
+- `E` → export all bars (natural bar order)
+
+By default, files are written to:
+
+```text
+exports/
+```
+
+Naming format:
+
+- Full pattern: `{prefix}_bpm{BPM}.wav` (example: `my_pattern_bpm120.wav`)
+- Per-bar: `{prefix}_bar{index:02d}_{numerator}-{denominator}.wav`
+  (example: `my_pattern_bar01_4-4.wav`)
 
 ## Validation behavior
 

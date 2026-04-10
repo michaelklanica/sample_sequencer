@@ -1,7 +1,7 @@
-# Sample Sequencer — Phase 6 Real-Time Playback Foundation
+# Sample Sequencer — Phase 7 Pattern-Level Real-Time Transport
 
-Phase 6 keeps the multi-bar offline architecture and adds the first callback-driven
-**real-time playback foundation** while keeping engine, audio, and UI layers separated.
+Phase 7 keeps the multi-bar offline architecture and extends callback-driven
+**real-time transport** from current-bar looping to full-pattern looping in natural bar order.
 
 ## What this phase implements
 
@@ -21,16 +21,20 @@ Phase 6 keeps the multi-bar offline architecture and adds the first callback-dri
   - playback order prompt editing
   - leaf pitch offset editing
   - current-bar real-time loop playback toggle (`space`)
+  - full-pattern real-time loop playback toggle (`P`)
 - Offline rendering supports:
   - rendering all bars in natural order
   - rendering explicit chained order (e.g. `[0, 1, 0, 2]`)
   - bar-duration-aware timeline assembly across mixed time signatures
 - Real-time playback supports:
   - callback-driven output via `sounddevice`
-  - looping the currently selected bar only
+  - looping the currently selected bar
+  - looping the full pattern in natural bar order (`bar 0 -> 1 -> ... -> last -> 0`)
+  - per-bar duration stitching across mixed time signatures in pattern-loop mode
   - overlapping sample voices
-  - safe wraparound trigger scheduling at bar boundaries
-  - stopping playback automatically when the active bar changes
+  - safe wraparound trigger scheduling at loop boundaries
+  - stopping playback automatically when the active bar changes (bar-loop mode)
+  - stopping playback automatically when pattern structure changes
 - JSON format now supports:
   - `bars` as a non-empty list
   - optional `playback_order` with validation
@@ -43,10 +47,10 @@ Phase 6 keeps the multi-bar offline architecture and adds the first callback-dri
 
 ## Current limitations (intentional)
 
-- Real-time playback currently loops only the selected bar
-- Changing selected bar stops active real-time playback
-- Full-pattern real-time playback is not implemented yet
-- Chain-aware real-time playback is not implemented yet
+- Real-time full-pattern playback uses natural bar order only
+- Chain-aware (`playback_order`) real-time playback is not implemented yet
+- Changing selected bar stops active playback only in bar-loop mode
+- Structural edits may stop active real-time playback for safety
 - No arranger/song timeline yet
 - `pitch_offset` is metadata-only in this phase:
   - stored on leaf events
@@ -156,6 +160,7 @@ Validation rules:
 - `b`: render + play current bar once
 - `p`: render + play full pattern/chain once
 - `space`: toggle real-time loop playback for current bar
+- `P`: toggle real-time loop playback for full pattern (natural bar order)
 - `e`: export full pattern WAV to `exports/`
 - `E`: export each bar WAV to `exports/`
 - `R`: refresh tree/panels

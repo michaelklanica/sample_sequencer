@@ -39,9 +39,9 @@ class SequencerGuiApp:
         self.current_bar_index = 0
         self.selected_path = "0"
         self.transport_mode = "bar"
+        self._ui_status_message: str | None = None
 
         self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.bpm)
-        self.realtime_looper.set_bar_loop(self.pattern.bars[self.current_bar_index], bpm=self.bpm)
 
         self.window = MainWindow()
         self._wire_events()
@@ -96,7 +96,6 @@ class SequencerGuiApp:
         self._apply_edit_policy("select_bar")
         self.current_bar_index = index
         self.selected_path = "0"
-        self.realtime_looper.set_bar_loop(self.pattern.bars[self.current_bar_index], bpm=self.bpm)
         self.refresh_ui()
 
     def _select_path(self, path: str) -> None:
@@ -168,7 +167,17 @@ class SequencerGuiApp:
         mapping = {"Bar": "bar", "Pattern": "pattern", "Chain": "chain"}
         self.transport_mode = mapping.get(mode, "bar")
 
-    def _play(self) -> None:
+    def _has_loaded_samples(self) -> bool:
+        return self.sample_library.sample_rate is not None and bool(self.sample_library.loaded_slots())
+
+    def _set_ui_status(self, message: str | None) -> None:
+        self._ui_status_message = message
+        self._refresh_transport()
+
+    def _prepare_realtime_for_current_mode(self) -> bool:
+        if not self._has_loaded_samples():
+            self._set_ui_status("Cannot start playback: no samples loaded.")
+            return False
         try:
             if self.transport_mode == "bar":
                 self.realtime_looper.set_bar_loop(self.pattern.bars[self.current_bar_index], bpm=self.bpm)
@@ -176,8 +185,20 @@ class SequencerGuiApp:
                 self.realtime_looper.set_pattern_loop(self.pattern, bpm=self.bpm)
             else:
                 self.realtime_looper.set_chain_loop(self.pattern, bpm=self.bpm)
+        except Exception as exc:
+            self._set_ui_status(str(exc))
+            QMessageBox.warning(self.window, "Playback", str(exc))
+            return False
+        self._set_ui_status(None)
+        return True
+
+    def _play(self) -> None:
+        if not self._prepare_realtime_for_current_mode():
+            return
+        try:
             self.realtime_looper.start()
         except Exception as exc:
+            self._set_ui_status(str(exc))
             QMessageBox.warning(self.window, "Playback", str(exc))
 
     def _stop(self) -> None:
@@ -191,7 +212,7 @@ class SequencerGuiApp:
         self.current_bar_index = 0
         self.selected_path = "0"
         self.project_path = None
-        self.realtime_looper.set_bar_loop(self.pattern.bars[self.current_bar_index], bpm=self.bpm)
+        self._ui_status_message = None
         self.refresh_ui()
 
     def _save_project(self) -> None:
@@ -226,9 +247,9 @@ class SequencerGuiApp:
             if wav_path.exists():
                 self.sample_library.load_wav_into_slot(slot, wav_path)
         self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.bpm)
-        self.realtime_looper.set_bar_loop(self.pattern.bars[0], bpm=self.bpm)
         self.current_bar_index = 0
         self.selected_path = "0"
+        self._ui_status_message = None
         self.refresh_ui()
 
     def _export(self) -> None:
@@ -259,7 +280,7 @@ class SequencerGuiApp:
             bar_chain = f"Step: {snap.current_chain_position + 1}"
         else:
             bar_chain = f"Bar: {self.current_bar_index}"
-        status = snap.status_message or "Ready"
+        status = self._ui_status_message or snap.status_message or "Ready"
         self.window.transport_panel.set_values(
             state=state,
             mode=mode,

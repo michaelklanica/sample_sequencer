@@ -26,6 +26,9 @@ _INVALIDATION_REASONS: dict[str, str] = {
     "set_time_signature": "time signature changed",
     "set_transport_mode": "transport mode changed",
     "select_bar": "active bar changed while bar-loop mode was active",
+    "new_pattern": "pattern replaced",
+    "load_pattern": "pattern replaced",
+    "set_bpm": "tempo changed",
 }
 
 

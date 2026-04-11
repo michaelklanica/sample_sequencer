@@ -118,8 +118,6 @@ def validate_pattern_json(data: Any) -> None:
     sample_slots = data["sample_slots"]
     if not isinstance(sample_slots, dict):
         raise _err("$.sample_slots", "sample_slots must be an object mapping slot ids to filenames")
-    if len(sample_slots) == 0:
-        raise _err("$.sample_slots", "sample_slots cannot be empty")
 
     for raw_slot, filename in sample_slots.items():
         slot = _validate_slot_id(raw_slot, "$.sample_slots")

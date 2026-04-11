@@ -79,3 +79,23 @@ class Pattern:
     @classmethod
     def one_bar(cls, time_signature: TimeSignature) -> "Pattern":
         return cls(bars=[Bar(time_signature=time_signature)])
+
+
+def create_blank_bar(time_signature: TimeSignature) -> Bar:
+    """Create a new blank bar with a single default leaf covering the full span."""
+    return Bar(time_signature=time_signature)
+
+
+def create_blank_pattern(name: str, bpm: float, numerator: int, denominator: int) -> Pattern:
+    """Create a new single-bar blank pattern for authoring workflows.
+
+    The Pattern model stores bar/tree structure; metadata like name and BPM are
+    validated here for caller convenience and tracked by app/project state.
+    """
+    if not name.strip():
+        raise ValueError("Pattern name cannot be empty.")
+    if bpm <= 0:
+        raise ValueError("BPM must be greater than zero.")
+
+    time_signature = TimeSignature(numerator=numerator, denominator=denominator)
+    return Pattern(bars=[create_blank_bar(time_signature=time_signature)])

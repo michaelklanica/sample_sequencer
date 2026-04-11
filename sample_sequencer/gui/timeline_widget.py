@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QPoint, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QPainter, QPen
 from PySide6.QtWidgets import QMenu, QWidget
 
@@ -27,14 +27,19 @@ class TimelineWidget(QWidget):
         super().__init__()
         self._bar: Bar | None = None
         self._selected_path: str | None = None
+        self._hovered_node: RhythmNode | None = None
         self._leaf_hits: list[LeafHit] = []
         self.setMinimumHeight(120)
+        self.setMouseTracking(True)
 
     def set_bar(self, bar: Bar | None) -> None:
         self._bar = bar
+        self._hovered_node = None
         self.update()
 
     def set_selected_node(self, node_path: str | None) -> None:
+        if self._selected_path == node_path:
+            return
         self._selected_path = node_path
         self.update()
 
@@ -87,35 +92,69 @@ class TimelineWidget(QWidget):
         painter.drawText(8, 16, "Timeline (single bar)")
 
         for hit in self._leaf_hits:
-            color = self._color_for_slot(hit.node.sample_slot)
-            painter.setBrush(color)
-            pen = QPen(QColor("#111111"))
-            pen.setWidth(1)
+            base_color = self._color_for_slot(hit.node.sample_slot)
+            is_selected = hit.path == self._selected_path
+            is_hovered = hit.node == self._hovered_node
+
+            fill_color = base_color
+            border_color = QColor("#111111")
+            border_width = 1
+            draw_rect = QRectF(hit.rect)
+
+            if is_selected:
+                fill_color = base_color.darker(118)
+                border_color = QColor("#FFB347")
+                border_width = 3
+                draw_rect.adjust(1, 1, -1, -1)
+            elif is_hovered:
+                fill_color = base_color.lighter(118)
+                border_color = QColor("#D0D0D0")
+                border_width = 2
+
+            painter.setBrush(fill_color)
+            pen = QPen(border_color)
+            pen.setWidth(border_width)
             painter.setPen(pen)
-            painter.drawRect(hit.rect)
+            painter.drawRect(draw_rect)
 
-            if hit.path == self._selected_path:
-                select_pen = QPen(QColor("#FFD166"))
-                select_pen.setWidth(3)
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.setPen(select_pen)
-                painter.drawRect(hit.rect)
-
-    def _hit_test(self, point: QPoint) -> LeafHit | None:
+    def _hit_test(self, point: QPointF | QPoint) -> LeafHit | None:
+        self._rebuild_hits()
+        lookup_point = QPointF(point)
         for hit in self._leaf_hits:
-            if hit.rect.contains(point):
+            if hit.rect.contains(lookup_point):
                 return hit
         return None
 
+    def _node_at_pos(self, pos: QPointF) -> RhythmNode | None:
+        hit = self._hit_test(pos)
+        if hit is None:
+            return None
+        return hit.node
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        node = self._node_at_pos(event.position())
+        if node != self._hovered_node:
+            self._hovered_node = node
+            self.setCursor(Qt.CursorShape.PointingHandCursor if node is not None else Qt.CursorShape.ArrowCursor)
+            self.update()
+
+    def leaveEvent(self, event) -> None:  # type: ignore[override]
+        del event
+        if self._hovered_node is not None:
+            self._hovered_node = None
+            self.unsetCursor()
+            self.update()
+
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
-        hit = self._hit_test(event.position().toPoint())
-        if event.button() == Qt.MouseButton.LeftButton and hit is not None:
-            self.blockSelected.emit(hit.path)
+        hit = self._hit_test(event.position())
+        if event.button() == Qt.MouseButton.LeftButton:
+            if hit is not None:
+                self.blockSelected.emit(hit.path)
         if event.button() == Qt.MouseButton.RightButton and hit is not None:
             self._open_context_menu(event.globalPosition().toPoint(), hit)
 
     def mouseDoubleClickEvent(self, event) -> None:  # type: ignore[override]
-        hit = self._hit_test(event.position().toPoint())
+        hit = self._hit_test(event.position())
         if event.button() == Qt.MouseButton.LeftButton and hit is not None:
             self.splitRequested.emit(hit.path, 2)
 

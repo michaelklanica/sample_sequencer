@@ -295,6 +295,7 @@ class SequencerGuiApp:
         self.window.bar_list_panel.set_pattern(self.pattern, self.current_bar_index)
         self.window.tree_panel.set_bar(bar, self.selected_path)
         self.window.timeline_widget.set_bar(bar)
+        self.window.timeline_widget.set_sample_library(self.sample_library)
         self.window.timeline_widget.set_selected_node(self.selected_path)
         self.window.inspector_panel.set_node(self.selected_path, selected)
         self.window.slot_panel.set_library(self.sample_library)

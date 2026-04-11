@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QPainter, QPen
-from PySide6.QtWidgets import QMenu, QWidget
+from PySide6.QtWidgets import QMenu, QToolTip, QWidget
 
+from audio.sample_library import SampleLibrary
 from engine.pattern import Bar
 from engine.rhythm_tree import RhythmNode
 
@@ -26,6 +28,7 @@ class TimelineWidget(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self._bar: Bar | None = None
+        self._sample_library: SampleLibrary | None = None
         self._selected_path: str | None = None
         self._hovered_node: RhythmNode | None = None
         self._leaf_hits: list[LeafHit] = []
@@ -41,6 +44,10 @@ class TimelineWidget(QWidget):
         if self._selected_path == node_path:
             return
         self._selected_path = node_path
+        self.update()
+
+    def set_sample_library(self, sample_library: SampleLibrary | None) -> None:
+        self._sample_library = sample_library
         self.update()
 
     def _iter_leaves(self, node: RhythmNode, path: str) -> list[tuple[str, RhythmNode]]:
@@ -81,6 +88,38 @@ class TimelineWidget(QWidget):
             w = max(4.0, leaf.duration_fraction * width)
             self._leaf_hits.append(LeafHit(path=path, node=leaf, rect=QRectF(x, top, w, height)))
 
+    def _short_sample_name(self, slot: int) -> str | None:
+        if self._sample_library is None:
+            return None
+        if slot < 0 or slot >= len(self._sample_library.slots):
+            return None
+        sample = self._sample_library.slots[slot]
+        if sample is None:
+            return None
+        stem = Path(sample.path.name).stem.replace("_", " ").strip()
+        if not stem:
+            return None
+        words = stem.split()
+        compact = " ".join(words[:2]) if words else stem
+        return compact[:18]
+
+    def _label_for_hit(self, hit: LeafHit) -> str:
+        width = hit.rect.width()
+        slot = hit.node.sample_slot
+        if width <= 45:
+            return ""
+        if slot is None:
+            return "Rest" if width >= 90 else "—"
+
+        slot_label = f"S{slot}"
+        if width < 90:
+            return slot_label
+
+        sample_name = self._short_sample_name(slot)
+        if sample_name:
+            return f"{slot_label} {sample_name}"
+        return slot_label
+
     def paintEvent(self, event) -> None:  # type: ignore[override]
         del event
         self._rebuild_hits()
@@ -90,32 +129,63 @@ class TimelineWidget(QWidget):
 
         painter.setPen(QColor("#DDDDDD"))
         painter.drawText(8, 16, "Timeline (single bar)")
+        font_metrics = painter.fontMetrics()
 
         for hit in self._leaf_hits:
             base_color = self._color_for_slot(hit.node.sample_slot)
             is_selected = hit.path == self._selected_path
             is_hovered = hit.node == self._hovered_node
+            is_rest = hit.node.sample_slot is None
 
             fill_color = base_color
             border_color = QColor("#111111")
             border_width = 1
             draw_rect = QRectF(hit.rect)
+            border_style = Qt.PenStyle.SolidLine
 
+            if is_rest:
+                fill_color = QColor("#5B5B5B")
+                border_color = QColor("#9A9A9A")
+                border_style = Qt.PenStyle.DashLine
             if is_selected:
                 fill_color = base_color.darker(118)
+                if is_rest:
+                    fill_color = QColor("#4A4A4A")
                 border_color = QColor("#FFB347")
                 border_width = 3
                 draw_rect.adjust(1, 1, -1, -1)
             elif is_hovered:
                 fill_color = base_color.lighter(118)
+                if is_rest:
+                    fill_color = QColor("#6E6E6E")
                 border_color = QColor("#D0D0D0")
                 border_width = 2
 
             painter.setBrush(fill_color)
             pen = QPen(border_color)
             pen.setWidth(border_width)
+            pen.setStyle(border_style)
             painter.setPen(pen)
             painter.drawRect(draw_rect)
+
+            label = self._label_for_hit(hit)
+            if not label:
+                continue
+
+            text_padding = 6
+            text_rect = draw_rect.adjusted(text_padding, 0, -text_padding, 0)
+            if text_rect.width() <= 6:
+                continue
+
+            text_color = QColor("#101010")
+            if is_selected:
+                text_color = QColor("#FFFFFF")
+            elif is_rest:
+                text_color = QColor("#E5E5E5")
+
+            painter.setPen(text_color)
+            text = font_metrics.elidedText(label, Qt.TextElideMode.ElideRight, int(text_rect.width()))
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
 
     def _hit_test(self, point: QPointF | QPoint) -> LeafHit | None:
         self._rebuild_hits()
@@ -125,18 +195,25 @@ class TimelineWidget(QWidget):
                 return hit
         return None
 
-    def _node_at_pos(self, pos: QPointF) -> RhythmNode | None:
-        hit = self._hit_test(pos)
-        if hit is None:
-            return None
-        return hit.node
-
     def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
-        node = self._node_at_pos(event.position())
+        hit = self._hit_test(event.position())
+        node = None if hit is None else hit.node
         if node != self._hovered_node:
             self._hovered_node = node
             self.setCursor(Qt.CursorShape.PointingHandCursor if node is not None else Qt.CursorShape.ArrowCursor)
             self.update()
+        if hit is not None:
+            slot_text = "Rest" if hit.node.sample_slot is None else f"S{hit.node.sample_slot}"
+            name = ""
+            if hit.node.sample_slot is not None:
+                short_name = self._short_sample_name(hit.node.sample_slot)
+                if short_name:
+                    name = f" · {short_name}"
+            vel = f" · v{hit.node.velocity:.2f}"
+            dur = f" · {hit.node.duration_fraction:.3f}"
+            QToolTip.showText(event.globalPosition().toPoint(), f"{slot_text}{name}{vel}{dur}", self)
+        else:
+            QToolTip.hideText()
 
     def leaveEvent(self, event) -> None:  # type: ignore[override]
         del event

@@ -88,6 +88,12 @@ Legacy CLI demo mode:
 python main.py --demo
 ```
 
+Desktop GUI MVP (Phase 1 foundation):
+
+```bash
+python -m sample_sequencer.gui.app
+```
+
 CLI WAV export:
 
 ```bash

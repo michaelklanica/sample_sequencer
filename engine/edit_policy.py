@@ -10,6 +10,8 @@ _LIVE_SAFE_ACTIONS: set[str] = {
     "set_slot",
     "set_pitch_offset",
     "toggle_rest",
+    "paste_event_values",
+    "fill_sibling_event_values",
     "select_node",
     "refresh_ui",
 }
@@ -29,6 +31,7 @@ _INVALIDATION_REASONS: dict[str, str] = {
     "new_pattern": "pattern replaced",
     "load_pattern": "pattern replaced",
     "set_bpm": "tempo changed",
+    "initialize_grid": "grid initialization changed loop structure",
 }
 
 

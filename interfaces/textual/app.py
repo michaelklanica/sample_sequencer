@@ -17,6 +17,13 @@ from audio.realtime import RealtimeLooper
 from audio.renderer import OfflineRenderer
 from audio.sample_library import MAX_SLOTS, SampleLibrary
 from engine.edit_policy import classify_edit, invalidation_reason
+from engine.event_value_ops import (
+    EventValueClipboard,
+    apply_leaf_event_values,
+    copy_leaf_event_values,
+    fill_sibling_leaves,
+    initialize_bar_grid,
+)
 from engine.pattern import Pattern, create_blank_bar, create_blank_pattern
 from engine.rhythm_tree import RhythmNode
 from engine.time_signature import TimeSignature
@@ -63,9 +70,10 @@ class SequencerTUI(App[None]):
     #main_row { height: 1fr; }
     #left_panel { width: 2fr; }
     #right_panel { width: 1fr; }
-    #bar_list_panel, #tree_panel, #inspector_panel, #status_panel, #transport_panel {
+    #bar_list_panel, #tree_panel, #inspector_panel, #slots_panel, #status_panel, #transport_panel {
         border: solid $accent;
     }
+    #slots_panel { height: 1fr; }
     #bar_list_panel { height: 8; }
     #transport_panel { height: 11; }
     #status_panel { height: 12; }
@@ -86,7 +94,13 @@ class SequencerTUI(App[None]):
         Binding("5", "split_selected(5)", "Split 5"),
         Binding("6", "split_selected(6)", "Split 6"),
         Binding("s", "set_slot", "Set/Clear Slot"),
+        Binding("z", "audition_selected_slot", "Audition Leaf Slot"),
+        Binding("Z", "audition_slot_prompt", "Audition Slot #"),
         Binding("v", "set_velocity", "Set Velocity"),
+        Binding("c", "copy_event_values", "Copy Event Values"),
+        Binding("j", "paste_event_values", "Paste Event Values"),
+        Binding("f", "fill_sibling_event_values", "Fill Sibling Leaves"),
+        Binding("g", "quick_init_grid", "Quick Grid"),
         Binding("n", "new_pattern", "New Pattern"),
         Binding("l", "load_pattern", "Load Pattern"),
         Binding("w", "save_pattern", "Save"),
@@ -138,6 +152,7 @@ class SequencerTUI(App[None]):
         self.node_map: dict[str, RhythmNode] = {}
         self.status_lines: list[str] = []
         self.subtree_clipboard: RhythmNode | None = None
+        self.event_value_clipboard: EventValueClipboard | None = None
         self.realtime_looper = RealtimeLooper(sample_library=sample_library, bpm=bpm)
         self._transport_timer: Timer | None = None
 
@@ -151,6 +166,7 @@ class SequencerTUI(App[None]):
             ),
             Vertical(
                 Static("", id="inspector_panel", markup=False),
+                Static("", id="slots_panel", markup=False),
                 Static("", id="transport_panel", markup=False),
                 id="right_panel",
             ),
@@ -225,9 +241,22 @@ class SequencerTUI(App[None]):
             sample = self.sample_library.slots[slot]
             if sample is None:
                 continue
-            lines.append(f"  {slot:02d} -> {sample.path.name}")
+            lines.append(f"  {slot:02d} -> {sample.path.name} ({sample.channels}ch @{sample.sample_rate}Hz)")
         if len(lines) == 1:
             lines.append("  (none loaded)")
+        return "\n".join(lines)
+
+    def _sample_slot_panel_text(self) -> str:
+        selected = self._selected_node()
+        selected_slot = selected.sample_slot if selected is not None and selected.is_leaf() else None
+        lines = ["Sample slots:"]
+        for slot in range(MAX_SLOTS):
+            marker = ">" if slot == selected_slot else " "
+            sample = self.sample_library.slots[slot]
+            if sample is None:
+                lines.append(f"{marker} {slot:02d}  —")
+            else:
+                lines.append(f"{marker} {slot:02d}  {sample.path.name} ({sample.channels}ch @{sample.sample_rate}Hz)")
         return "\n".join(lines)
 
     def _mark_dirty(self) -> None:
@@ -251,6 +280,7 @@ class SequencerTUI(App[None]):
     def _refresh_panels(self) -> None:
         node = self._selected_node()
         inspector = self.query_one("#inspector_panel", Static)
+        slots = self.query_one("#slots_panel", Static)
         transport = self.query_one("#transport_panel", Static)
         status = self.query_one("#status_panel", Static)
 
@@ -275,6 +305,7 @@ class SequencerTUI(App[None]):
             )
 
         self._refresh_bar_list()
+        slots.update(self._sample_slot_panel_text())
         transport.update(self._format_transport_panel())
         info_lines = [
             f"Pattern: {self.pattern_name} | BPM: {self.bpm:.2f}",
@@ -282,7 +313,8 @@ class SequencerTUI(App[None]):
             f"Loaded slots: {self._samples_summary()}",
             (
                 "Keys: n new | l load | w save | W save-as | N rename | B bpm | "
-                "2-6 split | s slot | v vel | t pitch | m rest | y copy | u paste | r reset | "
+                "2-6 split | g grid | s slot | z/Z audition | v vel | t pitch | m rest | "
+                "c copy-events | j paste-events | f fill-siblings | y copy-subtree | u paste-subtree | r reset | "
                 "o order | p pattern | b bar | space current-bar-loop | P pattern-loop | C chain-loop | e export | E bars export | "
                 "a add bar | A custom bar | d/x bars | [/] switch | q quit"
             ),
@@ -518,6 +550,54 @@ class SequencerTUI(App[None]):
         )
         self.push_screen(PromptScreen(prompt_title), handle)
 
+    def _audition_slot(self, slot: int) -> None:
+        if slot < 0 or slot >= MAX_SLOTS:
+            self._push_status("Audition failed: slot must be 0..15.")
+            self._refresh_panels()
+            return
+        sample = self.sample_library.slots[slot]
+        if sample is None:
+            self._push_status(f"Audition failed: slot {slot} is empty.")
+            self._refresh_panels()
+            return
+        if self.realtime_looper.is_playing:
+            self.realtime_looper.stop(reason="sample audition")
+            self._push_status("Stopped realtime playback before sample audition.")
+        try:
+            play_once(sample.audio, sample.sample_rate)
+            self._push_status(f"Auditioned slot {slot}: {sample.path.name}.")
+        except Exception as exc:
+            self._push_status(f"Audition failed: {exc}")
+        self._refresh_panels()
+
+    def action_audition_selected_slot(self) -> None:
+        node = self._selected_node()
+        if node is None or not node.is_leaf():
+            self._push_status("Audition requires a selected leaf.")
+            self._refresh_panels()
+            return
+        if node.sample_slot is None:
+            self._push_status("Audition failed: selected leaf has no assigned slot.")
+            self._refresh_panels()
+            return
+        self._audition_slot(node.sample_slot)
+
+    def action_audition_slot_prompt(self) -> None:
+        def handle(value: str | None) -> None:
+            if value is None:
+                self._push_status("Audition canceled.")
+                self._refresh_panels()
+                return
+            try:
+                slot = int(value)
+            except ValueError:
+                self._push_status("Audition failed: enter a slot number 0..15.")
+                self._refresh_panels()
+                return
+            self._audition_slot(slot)
+
+        self.push_screen(PromptScreen(f"Audition slot number (0-{MAX_SLOTS - 1}):"), handle)
+
     def action_set_velocity(self) -> None:
         node = self._selected_node()
         if node is None or not node.is_leaf():
@@ -623,6 +703,54 @@ class SequencerTUI(App[None]):
         self._push_status(f"Pasted subtree over node {self.selected_path}.")
         self._refresh_panels()
 
+    def action_copy_event_values(self) -> None:
+        node = self._selected_node()
+        if node is None or not node.is_leaf():
+            self._push_status("Copy event values requires a selected leaf.")
+            self._refresh_panels()
+            return
+        self.event_value_clipboard = copy_leaf_event_values(node)
+        self._push_status(f"Copied leaf event values from {self.selected_path}.")
+        self._refresh_panels()
+
+    def action_paste_event_values(self) -> None:
+        node = self._selected_node()
+        if node is None or not node.is_leaf():
+            self._push_status("Paste event values requires a selected leaf.")
+            self._refresh_panels()
+            return
+        if self.event_value_clipboard is None:
+            self._push_status("Paste event values rejected: clipboard is empty.")
+            self._refresh_panels()
+            return
+        was_live_safe = self._apply_edit_policy("paste_event_values")
+        apply_leaf_event_values(node, self.event_value_clipboard)
+        self._mark_dirty()
+        self._push_status(f"Pasted event values onto {self.selected_path}.")
+        if was_live_safe:
+            self._push_status(f"Playback continues: pasted event values to leaf {self.selected_path}.")
+        self._rebuild_tree()
+        self._refresh_panels()
+
+    def action_fill_sibling_event_values(self) -> None:
+        node = self._selected_node()
+        if node is None or not node.is_leaf():
+            self._push_status("Fill siblings requires a selected leaf.")
+            self._refresh_panels()
+            return
+        if self.event_value_clipboard is None:
+            self._push_status("Fill siblings rejected: event clipboard is empty.")
+            self._refresh_panels()
+            return
+        was_live_safe = self._apply_edit_policy("fill_sibling_event_values")
+        filled = fill_sibling_leaves(node, self.event_value_clipboard)
+        self._mark_dirty()
+        self._push_status(f"Filled {filled} sibling leaves with copied event values.")
+        if was_live_safe:
+            self._push_status("Playback continues: sibling leaf values updated.")
+        self._rebuild_tree()
+        self._refresh_panels()
+
     def action_reset_subtree(self) -> None:
         self._apply_edit_policy("reset_subtree")
         node = self._selected_node()
@@ -635,6 +763,35 @@ class SequencerTUI(App[None]):
         self._rebuild_tree()
         self._push_status(f"Reset subtree {self.selected_path} to blank leaf.")
         self._refresh_panels()
+
+    def action_quick_init_grid(self) -> None:
+        def handle(value: str | None) -> None:
+            if value is None:
+                self._push_status("Grid initialization canceled.")
+                self._refresh_panels()
+                return
+            try:
+                divisions = int(value)
+            except ValueError:
+                self._push_status("Grid initialization failed: choose 4, 8, or 16.")
+                self._refresh_panels()
+                return
+            if divisions not in {4, 8, 16}:
+                self._push_status("Grid initialization failed: choose 4, 8, or 16.")
+                self._refresh_panels()
+                return
+
+            self._apply_edit_policy("initialize_grid")
+            bar = self.pattern.bars[self.current_bar_index]
+            initialize_bar_grid(bar, divisions)
+            self._mark_dirty()
+            self.selected_path = "0"
+            self.realtime_looper.set_bar_loop(self.pattern.bars[self.current_bar_index], bpm=self.bpm)
+            self._rebuild_tree()
+            self._push_status(f"Initialized bar {self.current_bar_index} to a {divisions}-leaf grid.")
+            self._refresh_panels()
+
+        self.push_screen(PromptScreen("Initialize current bar grid (4, 8, 16):", placeholder="16"), handle)
 
     def action_edit_playback_order(self) -> None:
         current = self.pattern.resolved_playback_order()

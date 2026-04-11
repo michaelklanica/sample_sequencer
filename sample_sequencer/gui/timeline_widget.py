@@ -19,6 +19,15 @@ class LeafHit:
     rect: QRectF
 
 
+@dataclass(frozen=True)
+class GroupRegion:
+    node: RhythmNode
+    start_fraction: float
+    duration_fraction: float
+    depth: int
+    sibling_index: int
+
+
 class TimelineWidget(QWidget):
     blockSelected = Signal(str)
     splitRequested = Signal(str, int)
@@ -120,6 +129,64 @@ class TimelineWidget(QWidget):
             return f"{slot_label} {sample_name}"
         return slot_label
 
+    def _collect_group_regions(self, root_node: RhythmNode) -> list[GroupRegion]:
+        regions: list[GroupRegion] = []
+
+        def walk(node: RhythmNode, depth: int) -> None:
+            if node.is_leaf():
+                return
+            for sibling_index, child in enumerate(node.children):
+                if not child.is_leaf():
+                    regions.append(
+                        GroupRegion(
+                            node=child,
+                            start_fraction=child.start_fraction,
+                            duration_fraction=child.duration_fraction,
+                            depth=depth,
+                            sibling_index=sibling_index,
+                        )
+                    )
+                walk(child, depth + 1)
+
+        walk(root_node, depth=0)
+        return regions
+
+    def _draw_group_regions(self, painter: QPainter, width: float, top: float, height: float) -> None:
+        if self._bar is None:
+            return
+        min_region_width = 24.0
+        max_visual_depth = 2
+        regions = self._collect_group_regions(self._bar.root)
+        for region in regions:
+            region_width = region.duration_fraction * width
+            if region_width < min_region_width:
+                continue
+
+            visual_depth = min(region.depth, max_visual_depth - 1)
+            inset = 2.0 + (visual_depth * 4.0)
+            region_top = top + inset
+            region_height = max(10.0, height - (inset * 2.0))
+            x = 8 + (region.start_fraction * width)
+
+            if visual_depth == 0:
+                alpha = 22 if region.sibling_index % 2 == 0 else 16
+                outline_alpha = 55
+            else:
+                alpha = 14 if region.sibling_index % 2 == 0 else 10
+                outline_alpha = 38
+
+            fill_color = QColor(190, 210, 235, alpha)
+            outline_color = QColor(220, 228, 240, outline_alpha)
+            painter.fillRect(QRectF(x, region_top, region_width, region_height), fill_color)
+            pen = QPen(outline_color)
+            pen.setWidth(1)
+            painter.setPen(pen)
+            painter.drawLine(
+                QPointF(x + 0.5, region_top + 0.5),
+                QPointF(x + region_width - 0.5, region_top + 0.5),
+            )
+            painter.drawRect(QRectF(x + 0.5, region_top + 0.5, region_width - 1.0, region_height - 1.0))
+
     def paintEvent(self, event) -> None:  # type: ignore[override]
         del event
         self._rebuild_hits()
@@ -130,6 +197,11 @@ class TimelineWidget(QWidget):
         painter.setPen(QColor("#DDDDDD"))
         painter.drawText(8, 16, "Timeline (single bar)")
         font_metrics = painter.fontMetrics()
+        width = max(10, self.width() - 16)
+        top = 24
+        height = max(40, self.height() - 36)
+
+        self._draw_group_regions(painter, width=float(width), top=float(top), height=float(height))
 
         for hit in self._leaf_hits:
             base_color = self._color_for_slot(hit.node.sample_slot)

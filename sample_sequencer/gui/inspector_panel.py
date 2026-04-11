@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QComboBox,
-    QSignalBlocker,
 )
 
 from audio.sample_library import MAX_SLOTS

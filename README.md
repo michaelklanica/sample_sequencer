@@ -1,6 +1,6 @@
-# Sample Sequencer — Phase 11 Authoring Workflow Improvements
+# Sample Sequencer — Phase 12 Sample Management and Sequencing Ergonomics
 
-Phase 11 shifts the app from a demo-first launcher to an authoring-first tool. The default startup now opens the Textual editor so you can create, load, edit, and save patterns directly.
+Phase 12 improves high-frequency composition workflows in the Textual editor: slot browsing is clearer, sample audition is faster, and repetitive leaf editing requires fewer manual steps.
 
 ## What this phase implements
 
@@ -27,8 +27,20 @@ Phase 11 shifts the app from a demo-first launcher to an authoring-first tool. T
   - cleared after successful save and after successful project load
 - Safer project replacement flows:
   - new/load prompts for confirmation before replacing unsaved work
-- Improved sample-slot assignment usability:
-  - slot prompt now includes loaded-slot filename context
+- Dedicated sample-slot panel in TUI:
+  - always-visible slot list (`00..15`) with filename or empty marker
+  - currently selected leaf slot is highlighted
+  - includes simple sample metadata (`channels`, `sample_rate`) when loaded
+- Faster slot workflow:
+  - slot assignment prompt now includes loaded-slot filename + metadata context
+  - one-shot sample-slot audition from TUI (`z` for selected leaf slot, `Z` for prompted slot)
+  - if realtime playback is active, audition stops transport first for safety
+- Leaf event-value ergonomics:
+  - copy/paste **event values only** (`sample_slot`, `velocity`, `pitch_offset`) without replacing tree structure
+  - fill sibling leaves with copied event values for fast repeated rhythm content
+- Quick bar initialization helper:
+  - initialize current bar to a 4/8/16 equal-leaf grid
+  - treated as structural edit; realtime playback is stopped before applying
 - JSON save-back support for full project state:
   - pattern name, BPM, sample folder, sample slot mapping, bars, playback order, leaf event fields
 
@@ -100,13 +112,19 @@ Bar and structure editing:
 Leaf editing:
 
 - `s`: set/clear sample slot (prompt includes loaded slot list)
+- `z`: audition currently selected leaf's assigned sample slot (one-shot)
+- `Z`: audition prompted sample slot number (one-shot)
 - `v`: set velocity (`0.0..1.0`)
 - `t`: set pitch offset (`-24..24`)
 - `m`: toggle selected leaf rest/active
+- `c`: copy selected leaf event values only (`sample_slot`, `velocity`, `pitch_offset`)
+- `j`: paste copied event values onto selected leaf (timing/structure unchanged)
+- `f`: fill selected leaf's sibling leaves with copied event values
 - `y`: copy selected subtree
 - `u`: paste copied subtree over selected node
 - `r`: reset selected node/subtree to blank leaf
 - `o`: edit playback order (`0,1,0,2`; blank clears custom order)
+- `g`: quick-initialize current bar to grid (`4`, `8`, or `16` leaves)
 
 Playback and export:
 
@@ -124,7 +142,7 @@ Playback and export:
 
 The existing edit policy is preserved and extended:
 
-- Live-safe edits (slot/velocity/pitch/rest) can continue while realtime playback runs.
+- Live-safe edits (slot/velocity/pitch/rest + event-value paste/fill) can continue while realtime playback runs.
 - Transport-invalidating actions stop realtime playback safely before applying edits.
 - Project-level edits that stop playback include:
   - new pattern
@@ -132,6 +150,8 @@ The existing edit policy is preserved and extended:
   - BPM changes
   - bar additions/deletions/duplication
   - structural tree edits
+  - quick grid initialization (`g`)
+- Sample audition one-shots (`z` / `Z`) stop realtime playback first when needed, then play the slot preview.
 
 Save/save-as operations do not stop playback by themselves.
 

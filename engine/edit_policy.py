@@ -12,6 +12,10 @@ _LIVE_SAFE_ACTIONS: set[str] = {
     "toggle_rest",
     "paste_event_values",
     "fill_sibling_event_values",
+    "repeat_motif",
+    "rotate_sibling_values",
+    "alternate_fill_siblings",
+    "euclidean_fill_siblings",
     "select_node",
     "refresh_ui",
 }
@@ -32,6 +36,7 @@ _INVALIDATION_REASONS: dict[str, str] = {
     "load_pattern": "pattern replaced",
     "set_bpm": "tempo changed",
     "initialize_grid": "grid initialization changed loop structure",
+    "apply_subtree_template": "subtree template changed loop structure",
 }
 
 

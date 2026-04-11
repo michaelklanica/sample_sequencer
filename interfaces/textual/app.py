@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 from textual.timer import Timer
 
 from textual.app import App, ComposeResult
@@ -25,6 +25,14 @@ from engine.event_value_ops import (
     initialize_bar_grid,
 )
 from engine.pattern import Pattern, create_blank_bar, create_blank_pattern
+from engine.power_tools import (
+    LeafEventValue,
+    apply_subtree_template,
+    alternate_fill_siblings,
+    euclidean_fill_siblings,
+    repeat_motif_across_siblings,
+    rotate_sibling_event_values,
+)
 from engine.rhythm_tree import RhythmNode
 from engine.time_signature import TimeSignature
 from engine.tree_ops import copy_subtree, paste_subtree_over_target, reset_subtree
@@ -100,6 +108,12 @@ class SequencerTUI(App[None]):
         Binding("c", "copy_event_values", "Copy Event Values"),
         Binding("j", "paste_event_values", "Paste Event Values"),
         Binding("f", "fill_sibling_event_values", "Fill Sibling Leaves"),
+        Binding("M", "repeat_motif", "Repeat Motif"),
+        Binding("(", "rotate_sibling_values_left", "Rotate Values Left"),
+        Binding(")", "rotate_sibling_values_right", "Rotate Values Right"),
+        Binding("F", "alternate_fill_siblings", "Alternate Fill"),
+        Binding("T", "apply_subtree_template", "Apply Template"),
+        Binding("U", "euclidean_fill_siblings", "Euclidean Fill"),
         Binding("g", "quick_init_grid", "Quick Grid"),
         Binding("n", "new_pattern", "New Pattern"),
         Binding("l", "load_pattern", "Load Pattern"),
@@ -314,7 +328,8 @@ class SequencerTUI(App[None]):
             (
                 "Keys: n new | l load | w save | W save-as | N rename | B bpm | "
                 "2-6 split | g grid | s slot | z/Z audition | v vel | t pitch | m rest | "
-                "c copy-events | j paste-events | f fill-siblings | y copy-subtree | u paste-subtree | r reset | "
+                "c copy-events | j paste-events | f fill-siblings | M motif-repeat | (/) rotate-values | "
+                "F alternate-fill | T template | U euclidean-fill | y copy-subtree | u paste-subtree | r reset | "
                 "o order | p pattern | b bar | space current-bar-loop | P pattern-loop | C chain-loop | e export | E bars export | "
                 "a add bar | A custom bar | d/x bars | [/] switch | q quit"
             ),
@@ -369,6 +384,26 @@ class SequencerTUI(App[None]):
 
     def _push_status(self, message: str) -> None:
         self.status_lines.append(message)
+
+    def _parse_optional_slot(self, raw_value: str, *, allow_rest: bool = True) -> int | None:
+        value = raw_value.strip().lower()
+        if value in {"", "x", "none"}:
+            if allow_rest:
+                return None
+            raise ValueError("Slot is required for this operation.")
+        slot = int(value)
+        if slot < 0 or slot >= MAX_SLOTS:
+            raise ValueError(f"Slot must be in range 0..{MAX_SLOTS - 1}.")
+        return slot
+
+    def _parse_optional_velocity(self, raw_value: str, *, default: float) -> float:
+        value = raw_value.strip()
+        if value == "":
+            return default
+        velocity = float(value)
+        if velocity < 0.0 or velocity > 1.0:
+            raise ValueError("Velocity must be in [0.0, 1.0].")
+        return velocity
 
     def _confirm_discard_if_dirty(self, next_action_label: str, on_confirm: Callable[[], None]) -> None:
         if not self.is_dirty:
@@ -750,6 +785,253 @@ class SequencerTUI(App[None]):
             self._push_status("Playback continues: sibling leaf values updated.")
         self._rebuild_tree()
         self._refresh_panels()
+
+    def action_repeat_motif(self) -> None:
+        node = self._selected_node()
+        if node is None or not node.is_leaf():
+            self._push_status("Repeat motif requires a selected leaf.")
+            self._refresh_panels()
+            return
+
+        def handle(value: str | None) -> None:
+            if value is None:
+                self._push_status("Repeat motif canceled.")
+                self._refresh_panels()
+                return
+            try:
+                motif_length = int(value)
+                was_live_safe = self._apply_edit_policy("repeat_motif")
+                motif_len, sibling_count = repeat_motif_across_siblings(node, motif_length)
+            except ValueError as exc:
+                self._push_status(f"Repeat motif failed: {exc}")
+                self._refresh_panels()
+                return
+
+            self._mark_dirty()
+            self._push_status(f"Repeated {motif_len}-step motif across {sibling_count} sibling leaves.")
+            if was_live_safe:
+                self._push_status("Playback continues: sibling leaf values updated.")
+            self._rebuild_tree()
+            self._refresh_panels()
+
+        self.push_screen(PromptScreen("Motif length in leaves:", placeholder="2"), handle)
+
+    def action_rotate_sibling_values_left(self) -> None:
+        self._rotate_sibling_values("left")
+
+    def action_rotate_sibling_values_right(self) -> None:
+        self._rotate_sibling_values("right")
+
+    def _rotate_sibling_values(self, direction: Literal["left", "right"]) -> None:
+        node = self._selected_node()
+        if node is None or not node.is_leaf():
+            self._push_status("Rotate values requires a selected leaf.")
+            self._refresh_panels()
+            return
+        try:
+            was_live_safe = self._apply_edit_policy("rotate_sibling_values")
+            count = rotate_sibling_event_values(node, direction=direction)
+        except ValueError as exc:
+            self._push_status(f"Rotate failed: {exc}")
+            self._refresh_panels()
+            return
+
+        self._mark_dirty()
+        self._push_status(f"Rotated sibling event values {direction} across {count} leaves.")
+        if was_live_safe:
+            self._push_status("Playback continues: sibling leaf values updated.")
+        self._rebuild_tree()
+        self._refresh_panels()
+
+    def action_alternate_fill_siblings(self) -> None:
+        node = self._selected_node()
+        if node is None or not node.is_leaf():
+            self._push_status("Alternate fill requires a selected leaf.")
+            self._refresh_panels()
+            return
+
+        def handle_slot_a(raw_slot_a: str | None) -> None:
+            if raw_slot_a is None:
+                self._push_status("Alternate fill canceled.")
+                self._refresh_panels()
+                return
+
+            def handle_slot_b(raw_slot_b: str | None) -> None:
+                if raw_slot_b is None:
+                    self._push_status("Alternate fill canceled.")
+                    self._refresh_panels()
+                    return
+
+                def handle_vel_a(raw_vel_a: str | None) -> None:
+                    if raw_vel_a is None:
+                        self._push_status("Alternate fill canceled.")
+                        self._refresh_panels()
+                        return
+
+                    def handle_vel_b(raw_vel_b: str | None) -> None:
+                        if raw_vel_b is None:
+                            self._push_status("Alternate fill canceled.")
+                            self._refresh_panels()
+                            return
+                        try:
+                            event_a = LeafEventValue(
+                                sample_slot=self._parse_optional_slot(raw_slot_a),
+                                velocity=self._parse_optional_velocity(raw_vel_a, default=1.0),
+                                pitch_offset=0,
+                            )
+                            event_b = LeafEventValue(
+                                sample_slot=self._parse_optional_slot(raw_slot_b),
+                                velocity=self._parse_optional_velocity(raw_vel_b, default=1.0),
+                                pitch_offset=0,
+                            )
+                            was_live_safe = self._apply_edit_policy("alternate_fill_siblings")
+                            count = alternate_fill_siblings(node, event_a=event_a, event_b=event_b)
+                        except ValueError as exc:
+                            self._push_status(f"Alternate fill failed: {exc}")
+                            self._refresh_panels()
+                            return
+
+                        self._mark_dirty()
+                        self._push_status(f"Applied alternate fill across {count} sibling leaves.")
+                        if was_live_safe:
+                            self._push_status("Playback continues: sibling leaf values updated.")
+                        self._rebuild_tree()
+                        self._refresh_panels()
+
+                    self.push_screen(PromptScreen("Alternate fill velocity B (blank=1.0):", placeholder="1.0"), handle_vel_b)
+
+                self.push_screen(PromptScreen("Alternate fill velocity A (blank=1.0):", placeholder="1.0"), handle_vel_a)
+
+            self.push_screen(PromptScreen("Alternate fill slot B (0-15, blank/x = rest):"), handle_slot_b)
+
+        self.push_screen(PromptScreen("Alternate fill slot A (0-15, blank/x = rest):"), handle_slot_a)
+
+    def action_euclidean_fill_siblings(self) -> None:
+        node = self._selected_node()
+        if node is None or not node.is_leaf():
+            self._push_status("Euclidean fill requires a selected leaf.")
+            self._refresh_panels()
+            return
+
+        def handle_pulses(raw_pulses: str | None) -> None:
+            if raw_pulses is None:
+                self._push_status("Euclidean fill canceled.")
+                self._refresh_panels()
+                return
+
+            def handle_slot(raw_slot: str | None) -> None:
+                if raw_slot is None:
+                    self._push_status("Euclidean fill canceled.")
+                    self._refresh_panels()
+                    return
+
+                def handle_velocity(raw_velocity: str | None) -> None:
+                    if raw_velocity is None:
+                        self._push_status("Euclidean fill canceled.")
+                        self._refresh_panels()
+                        return
+
+                    def handle_rotation(raw_rotation: str | None) -> None:
+                        if raw_rotation is None:
+                            self._push_status("Euclidean fill canceled.")
+                            self._refresh_panels()
+                            return
+                        try:
+                            pulses = int(raw_pulses)
+                            event_value = LeafEventValue(
+                                sample_slot=self._parse_optional_slot(raw_slot, allow_rest=False),
+                                velocity=self._parse_optional_velocity(raw_velocity, default=1.0),
+                                pitch_offset=0,
+                            )
+                            rotation = int(raw_rotation) if raw_rotation.strip() else 0
+                            was_live_safe = self._apply_edit_policy("euclidean_fill_siblings")
+                            pulse_count, step_count = euclidean_fill_siblings(
+                                node,
+                                pulses=pulses,
+                                event_value=event_value,
+                                rotation=rotation,
+                            )
+                        except ValueError as exc:
+                            self._push_status(f"Euclidean fill failed: {exc}")
+                            self._refresh_panels()
+                            return
+
+                        self._mark_dirty()
+                        self._push_status(
+                            f"Applied Euclidean fill: {pulse_count} pulses over {step_count} leaves (rotation={rotation})."
+                        )
+                        if was_live_safe:
+                            self._push_status("Playback continues: sibling leaf values updated.")
+                        self._rebuild_tree()
+                        self._refresh_panels()
+
+                    self.push_screen(PromptScreen("Euclidean rotation offset (integer, blank=0):", placeholder="0"), handle_rotation)
+
+                self.push_screen(PromptScreen("Euclidean velocity (blank=1.0):", placeholder="1.0"), handle_velocity)
+
+            self.push_screen(PromptScreen("Euclidean pulse slot (0-15):"), handle_slot)
+
+        self.push_screen(PromptScreen("Euclidean pulses (k):", placeholder="3"), handle_pulses)
+
+    def action_apply_subtree_template(self) -> None:
+        node = self._selected_node()
+        if node is None or not node.is_leaf():
+            self._push_status("Subtree template requires a selected leaf.")
+            self._refresh_panels()
+            return
+
+        template_map: dict[str, tuple[Literal[
+            "straight_2",
+            "straight_4",
+            "triplet_3",
+            "quintuplet_5",
+            "sextuplet_6",
+            "four_last_triplet",
+            "four_middle_triplet",
+        ], str]] = {
+            "1": ("straight_2", "Straight 2"),
+            "2": ("straight_4", "Straight 4"),
+            "3": ("triplet_3", "Triplet 3"),
+            "4": ("quintuplet_5", "Quintuplet 5"),
+            "5": ("sextuplet_6", "Sextuplet 6"),
+            "6": ("four_last_triplet", "4 then subdivide last into 3"),
+            "7": ("four_middle_triplet", "4 then subdivide middle into 3"),
+        }
+        prompt = (
+            "Select subtree template:\\n"
+            "1) Straight 2\\n"
+            "2) Straight 4\\n"
+            "3) Triplet 3\\n"
+            "4) Quintuplet 5\\n"
+            "5) Sextuplet 6\\n"
+            "6) 4 then subdivide last into 3\\n"
+            "7) 4 then subdivide middle into 3"
+        )
+
+        def handle(raw_choice: str | None) -> None:
+            if raw_choice is None:
+                self._push_status("Subtree template apply canceled.")
+                self._refresh_panels()
+                return
+            choice = raw_choice.strip()
+            if choice not in template_map:
+                self._push_status("Template apply failed: choose 1-7.")
+                self._refresh_panels()
+                return
+            template_name, label = template_map[choice]
+            self._apply_edit_policy("apply_subtree_template")
+            try:
+                apply_subtree_template(node, template_name=template_name)
+            except ValueError as exc:
+                self._push_status(f"Template apply failed: {exc}")
+                self._refresh_panels()
+                return
+            self._mark_dirty()
+            self._rebuild_tree()
+            self._push_status(f"Applied template '{label}' to leaf {self.selected_path}.")
+            self._refresh_panels()
+
+        self.push_screen(PromptScreen(prompt), handle)
 
     def action_reset_subtree(self) -> None:
         self._apply_edit_policy("reset_subtree")

@@ -1,6 +1,6 @@
-# Sample Sequencer — Phase 12 Sample Management and Sequencing Ergonomics
+# Sample Sequencer — Phase 13 Pattern Building Power Tools
 
-Phase 12 improves high-frequency composition workflows in the Textual editor: slot browsing is clearer, sample audition is faster, and repetitive leaf editing requires fewer manual steps.
+Phase 13 adds fast pattern-building helpers that work with the existing bar-first recursive subdivision tree. The focus is faster rhythmic authoring through reusable templates and value-only sibling tools, while preserving transport safety behavior.
 
 ## What this phase implements
 
@@ -38,6 +38,12 @@ Phase 12 improves high-frequency composition workflows in the Textual editor: sl
 - Leaf event-value ergonomics:
   - copy/paste **event values only** (`sample_slot`, `velocity`, `pitch_offset`) without replacing tree structure
   - fill sibling leaves with copied event values for fast repeated rhythm content
+- Pattern-building power tools:
+  - apply subtree templates to selected leaves (`T`)
+  - repeat short motifs from first `N` siblings across full sibling groups (`M`)
+  - rotate sibling leaf event values left/right (`(` and `)`)
+  - apply alternating A/B values over sibling leaves (`F`)
+  - apply Euclidean replace fills over sibling leaves with pulses/slot/velocity/rotation (`U`)
 - Quick bar initialization helper:
   - initialize current bar to a 4/8/16 equal-leaf grid
   - treated as structural edit; realtime playback is stopped before applying
@@ -120,6 +126,12 @@ Leaf editing:
 - `c`: copy selected leaf event values only (`sample_slot`, `velocity`, `pitch_offset`)
 - `j`: paste copied event values onto selected leaf (timing/structure unchanged)
 - `f`: fill selected leaf's sibling leaves with copied event values
+- `M`: repeat motif across sibling leaves (prompts for motif length)
+- `(` / `)`: rotate sibling leaf event values left / right
+- `F`: alternate fill over sibling leaves (prompted slots + velocities)
+- `T`: apply subtree template to selected leaf
+  - templates: Straight 2, Straight 4, Triplet 3, Quintuplet 5, Sextuplet 6, 4+last-triplet, 4+middle-triplet
+- `U`: Euclidean fill (replace mode) over sibling leaves
 - `y`: copy selected subtree
 - `u`: paste copied subtree over selected node
 - `r`: reset selected node/subtree to blank leaf
@@ -143,6 +155,11 @@ Playback and export:
 The existing edit policy is preserved and extended:
 
 - Live-safe edits (slot/velocity/pitch/rest + event-value paste/fill) can continue while realtime playback runs.
+- Live-safe value-only power tools:
+  - motif repeat (`M`)
+  - sibling value rotate (`(` / `)`)
+  - alternate fill (`F`)
+  - Euclidean fill (`U`)
 - Transport-invalidating actions stop realtime playback safely before applying edits.
 - Project-level edits that stop playback include:
   - new pattern
@@ -150,6 +167,7 @@ The existing edit policy is preserved and extended:
   - BPM changes
   - bar additions/deletions/duplication
   - structural tree edits
+  - subtree template apply (`T`)
   - quick grid initialization (`g`)
 - Sample audition one-shots (`z` / `Z`) stop realtime playback first when needed, then play the slot preview.
 

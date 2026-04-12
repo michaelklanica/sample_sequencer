@@ -77,6 +77,8 @@ class SequencerGuiApp:
         w.saveClicked.connect(self._save_project)
         w.loadClicked.connect(self._load_project)
         w.exportClicked.connect(self._export)
+        w.loadSamplesClicked.connect(self._choose_and_load_samples)
+        w.reloadSamplesClicked.connect(self._reload_samples)
 
     def _iter_nodes(self, node: RhythmNode, path: str) -> list[tuple[str, RhythmNode]]:
         nodes = [(path, node)]
@@ -214,6 +216,64 @@ class SequencerGuiApp:
         self.project_path = None
         self._ui_status_message = None
         self.refresh_ui()
+
+    def _choose_and_load_samples(self) -> None:
+        start_dir = str(self.sample_folder) if self.sample_folder.exists() else str(Path.cwd())
+        selected = QFileDialog.getExistingDirectory(self.window, "Choose Sample Folder", start_dir)
+        if not selected:
+            return
+        self._load_samples_from_folder(Path(selected))
+
+    def _reload_samples(self) -> None:
+        if self.sample_folder is None or not self.sample_folder.exists():
+            self._set_ui_status("Cannot reload: no sample folder selected.")
+            return
+        self._load_samples_from_folder(self.sample_folder)
+
+    def _load_samples_from_folder(self, folder: Path) -> None:
+        folder = folder.expanduser().resolve()
+        if not folder.exists() or not folder.is_dir():
+            self._set_ui_status(f"Sample folder does not exist: {folder}")
+            return
+
+        wav_files = sorted((p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".wav"), key=lambda p: p.name.lower())
+        if not wav_files:
+            self._set_ui_status("No WAV files found in selected folder.")
+            return
+
+        if self.realtime_looper.is_playing:
+            self.realtime_looper.stop(reason="samples reloaded")
+
+        fresh_library = SampleLibrary()
+        loaded = 0
+        failures: list[str] = []
+        ignored = 0
+
+        for wav_path in wav_files:
+            if loaded >= MAX_SLOTS:
+                ignored += 1
+                continue
+            try:
+                fresh_library.load_wav_into_slot(loaded, wav_path)
+                loaded += 1
+            except Exception:
+                failures.append(wav_path.name)
+
+        if loaded == 0:
+            self._set_ui_status("No valid WAV files could be loaded from selected folder.")
+            return
+
+        self.sample_folder = folder
+        self.sample_library = fresh_library
+        self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.bpm)
+        self.refresh_ui()
+
+        parts = [f"Loaded {loaded} sample{'s' if loaded != 1 else ''} from {folder}"]
+        if ignored > 0:
+            parts.append(f"{ignored} additional file{'s' if ignored != 1 else ''} ignored")
+        if failures:
+            parts.append(f"{len(failures)} failed ({', '.join(failures[:3])}{'...' if len(failures) > 3 else ''})")
+        self._set_ui_status(". ".join(parts))
 
     def _save_project(self) -> None:
         if self.project_path is None:

@@ -27,6 +27,8 @@ class MainWindow(QMainWindow):
     saveClicked = Signal()
     loadClicked = Signal()
     exportClicked = Signal()
+    loadSamplesClicked = Signal()
+    reloadSamplesClicked = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -46,6 +48,8 @@ class MainWindow(QMainWindow):
         self.save_btn = QPushButton("Save")
         self.load_btn = QPushButton("Load")
         self.export_btn = QPushButton("Export")
+        self.load_samples_btn = QPushButton("Load Samples")
+        self.reload_samples_btn = QPushButton("Reload Samples")
         for widget in [
             self.play_btn,
             self.stop_btn,
@@ -54,6 +58,8 @@ class MainWindow(QMainWindow):
             self.save_btn,
             self.load_btn,
             self.export_btn,
+            self.load_samples_btn,
+            self.reload_samples_btn,
         ]:
             toolbar_layout.addWidget(widget)
         toolbar_layout.addStretch(1)
@@ -92,4 +98,6 @@ class MainWindow(QMainWindow):
         self.save_btn.clicked.connect(self.saveClicked.emit)
         self.load_btn.clicked.connect(self.loadClicked.emit)
         self.export_btn.clicked.connect(self.exportClicked.emit)
+        self.load_samples_btn.clicked.connect(self.loadSamplesClicked.emit)
+        self.reload_samples_btn.clicked.connect(self.reloadSamplesClicked.emit)
         self.mode_combo.currentTextChanged.connect(self.modeChanged.emit)

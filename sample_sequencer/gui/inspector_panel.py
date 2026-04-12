@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QFormLayout,
@@ -14,7 +16,7 @@ from PySide6.QtWidgets import (
     QComboBox,
 )
 
-from audio.sample_library import MAX_SLOTS
+from audio.sample_library import MAX_SLOTS, SampleLibrary
 from engine.rhythm_tree import RhythmNode
 
 
@@ -24,58 +26,126 @@ class InspectorPanel(QWidget):
     pitchChanged = Signal(int)
     splitRequested = Signal(int)
     clearRequested = Signal()
+    templateRequested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
-        self._path = QLabel("-")
-        self._duration = QLabel("-")
-        self._node_type = QLabel("None")
+        self._bar_index: int | None = None
+
+        self._summary = QLabel("No node selected")
+        self._summary.setWordWrap(True)
+        self._timing_summary = QLabel("-")
+        self._timing_summary.setWordWrap(True)
+
         self._slot_combo = QComboBox()
-        self._slot_combo.addItem("None", None)
+        self._slot_combo.addItem("None / Rest", None)
         for slot in range(MAX_SLOTS):
-            self._slot_combo.addItem(f"Slot {slot}", slot)
+            self._slot_combo.addItem(f"{slot:02d} — (empty)", slot)
+
         self._velocity = QSlider(Qt.Orientation.Horizontal)
         self._velocity.setMinimum(0)
         self._velocity.setMaximum(100)
+        self._velocity_value = QLabel("1.00")
+
         self._pitch = QSpinBox()
         self._pitch.setRange(-24, 24)
 
+        self._rest_note = QLabel("")
+        self._rest_note.setWordWrap(True)
+        self._set_rest_btn = QPushButton("Set Rest")
+
+        self._helper_text = QLabel("Select a block in the timeline or tree to edit it.")
+        self._helper_text.setWordWrap(True)
+        self._internal_info = QLabel("Internal group details will appear here.")
+        self._internal_info.setWordWrap(True)
+
         main = QVBoxLayout(self)
 
-        info_group = QGroupBox("Block Info")
-        info_form = QFormLayout(info_group)
-        info_form.addRow("Path", self._path)
-        info_form.addRow("Duration", self._duration)
-        info_form.addRow("Type", self._node_type)
+        summary_group = QGroupBox("Selection Summary")
+        summary_form = QFormLayout(summary_group)
+        summary_form.addRow("Selection", self._summary)
+        summary_form.addRow("Timing", self._timing_summary)
 
-        sample_group = QGroupBox("Sample Controls")
-        sample_form = QFormLayout(sample_group)
-        sample_form.addRow("Slot", self._slot_combo)
-        sample_form.addRow("Velocity", self._velocity)
-        sample_form.addRow("Pitch", self._pitch)
+        event_group = QGroupBox("Leaf Event Values")
+        event_form = QFormLayout(event_group)
+        event_form.addRow("Sample Slot", self._slot_combo)
 
-        action_group = QGroupBox("Actions")
-        action_layout = QVBoxLayout(action_group)
+        velocity_row_widget = QWidget()
+        velocity_row = QHBoxLayout(velocity_row_widget)
+        velocity_row.setContentsMargins(0, 0, 0, 0)
+        velocity_row.addWidget(self._velocity, 1)
+        velocity_row.addWidget(self._velocity_value)
+        event_form.addRow("Velocity", velocity_row_widget)
+
+        event_form.addRow("Pitch Offset", self._pitch)
+        event_form.addRow(self._set_rest_btn)
+        event_form.addRow(self._rest_note)
+
+        structure_group = QGroupBox("Structural Actions")
+        structure_layout = QVBoxLayout(structure_group)
         split_row = QHBoxLayout()
         self._split_buttons: list[QPushButton] = []
-        for parts in (2, 3, 4):
-            btn = QPushButton(f"Split {parts}")
+        for parts in (2, 3, 4, 5, 6):
+            btn = QPushButton(f"Split into {parts}")
             btn.clicked.connect(lambda _checked=False, p=parts: self.splitRequested.emit(p))
             split_row.addWidget(btn)
             self._split_buttons.append(btn)
-        action_layout.addLayout(split_row)
-        self._clear_btn = QPushButton("Clear")
+        structure_layout.addLayout(split_row)
+        self._template_btn = QPushButton("Apply Template")
+        self._template_btn.clicked.connect(self.templateRequested.emit)
+        self._clear_btn = QPushButton("Reset Subtree")
         self._clear_btn.clicked.connect(self.clearRequested.emit)
-        action_layout.addWidget(self._clear_btn)
+        structure_layout.addWidget(self._template_btn)
+        structure_layout.addWidget(self._clear_btn)
 
+        info_group = QGroupBox("Internal Info / Help")
+        info_layout = QVBoxLayout(info_group)
+        info_layout.addWidget(self._helper_text)
+        info_layout.addWidget(self._internal_info)
+
+        main.addWidget(summary_group)
+        main.addWidget(event_group)
+        main.addWidget(structure_group)
         main.addWidget(info_group)
-        main.addWidget(sample_group)
-        main.addWidget(action_group)
         main.addStretch(1)
 
         self._slot_combo.currentIndexChanged.connect(self._emit_slot)
-        self._velocity.valueChanged.connect(lambda value: self.velocityChanged.emit(value / 100.0))
+        self._velocity.valueChanged.connect(self._on_velocity_changed)
         self._pitch.valueChanged.connect(self.pitchChanged.emit)
+        self._set_rest_btn.clicked.connect(self._set_rest)
+
+        self._set_leaf_controls_enabled(False)
+        self._set_structure_enabled(selection_exists=False, leaf_selected=False)
+        self._show_mode_help(show_none=True, show_internal=False)
+
+    def set_sample_library(self, library: SampleLibrary | None) -> None:
+        blocker = QSignalBlocker(self._slot_combo)
+        selected_value = self._slot_combo.currentData()
+        self._slot_combo.clear()
+        self._slot_combo.addItem("None / Rest", None)
+        for slot in range(MAX_SLOTS):
+            label = f"{slot:02d} — (empty)"
+            if library is not None:
+                sample = library.slots[slot]
+                if sample is not None:
+                    label = f"{slot:02d} — {Path(sample.path).name}"
+            self._slot_combo.addItem(label, slot)
+        if selected_value is None:
+            self._slot_combo.setCurrentIndex(0)
+        elif isinstance(selected_value, int) and 0 <= selected_value < MAX_SLOTS:
+            self._slot_combo.setCurrentIndex(selected_value + 1)
+        del blocker
+
+    def set_bar_context(self, bar_index: int | None) -> None:
+        self._bar_index = bar_index
+
+    def _on_velocity_changed(self, value: int) -> None:
+        velocity = value / 100.0
+        self._velocity_value.setText(f"{velocity:.2f}")
+        self.velocityChanged.emit(velocity)
+
+    def _set_rest(self) -> None:
+        self._slot_combo.setCurrentIndex(0)
 
     def _emit_slot(self) -> None:
         value = self._slot_combo.currentData()
@@ -88,45 +158,79 @@ class InspectorPanel(QWidget):
         self._slot_combo.setEnabled(enabled)
         self._velocity.setEnabled(enabled)
         self._pitch.setEnabled(enabled)
-        self._clear_btn.setEnabled(enabled)
+        self._set_rest_btn.setEnabled(enabled)
 
-    def set_node(self, path: str | None, node: RhythmNode | None) -> None:
+    def _set_structure_enabled(self, selection_exists: bool, leaf_selected: bool) -> None:
+        for btn in self._split_buttons:
+            btn.setEnabled(leaf_selected)
+        self._template_btn.setEnabled(selection_exists)
+        self._clear_btn.setEnabled(selection_exists)
+
+    def _show_mode_help(self, show_none: bool, show_internal: bool) -> None:
+        self._helper_text.setVisible(show_none)
+        self._internal_info.setVisible(show_internal)
+
+    def set_node(self, bar_index: int | None, path: str | None, node: RhythmNode | None) -> None:
+        self.set_bar_context(bar_index)
         blockers = [
             QSignalBlocker(self._slot_combo),
             QSignalBlocker(self._velocity),
             QSignalBlocker(self._pitch),
         ]
-        self._path.setText(path if node is not None and path else "-")
 
         if node is None:
-            self._duration.setText("-")
-            self._node_type.setText("None")
+            self._summary.setText("No node selected")
+            self._timing_summary.setText("-")
             self._slot_combo.setCurrentIndex(0)
             self._velocity.setValue(100)
+            self._velocity_value.setText("1.00")
             self._pitch.setValue(0)
+            self._rest_note.setText("")
             self._set_leaf_controls_enabled(False)
-            for btn in self._split_buttons:
-                btn.setEnabled(False)
+            self._set_structure_enabled(selection_exists=False, leaf_selected=False)
+            self._show_mode_help(show_none=True, show_internal=False)
             del blockers
             return
 
-        self._duration.setText(f"{node.duration_fraction:.6f}")
+        bar_text = f"Bar {bar_index}" if bar_index is not None else "Bar ?"
+        node_path_text = path if path else "-"
+        timing_text = (
+            f"Start {node.start_fraction:.6f} • Duration {node.duration_fraction:.6f}"
+        )
+
         if node.is_leaf():
-            self._node_type.setText("Leaf")
+            self._summary.setText(f"{bar_text} • Leaf • Path {node_path_text}")
+            self._timing_summary.setText(timing_text)
             self._slot_combo.setCurrentIndex(0 if node.sample_slot is None else node.sample_slot + 1)
             self._velocity.setValue(int(round(node.velocity * 100)))
+            self._velocity_value.setText(f"{node.velocity:.2f}")
             self._pitch.setValue(int(node.pitch_offset))
+            self._rest_note.setText("This leaf is currently a rest." if node.sample_slot is None else "")
+            self._internal_info.setText("Internal group details will appear here.")
             self._set_leaf_controls_enabled(True)
-            for btn in self._split_buttons:
-                btn.setEnabled(True)
+            self._set_structure_enabled(selection_exists=True, leaf_selected=True)
+            self._show_mode_help(show_none=False, show_internal=False)
             del blockers
             return
 
-        self._node_type.setText("Internal")
+        self._summary.setText(f"{bar_text} • Internal Group • Path {node_path_text}")
+        self._timing_summary.setText(timing_text)
         self._slot_combo.setCurrentIndex(0)
         self._velocity.setValue(100)
+        self._velocity_value.setText("1.00")
         self._pitch.setValue(0)
+        self._rest_note.setText("")
+        child_count = len(node.children)
+        self._internal_info.setText(
+            "\n".join(
+                [
+                    f"Children: {child_count}",
+                    f"Start Fraction: {node.start_fraction:.6f}",
+                    f"Duration Fraction: {node.duration_fraction:.6f}",
+                ]
+            )
+        )
         self._set_leaf_controls_enabled(False)
-        for btn in self._split_buttons:
-            btn.setEnabled(False)
+        self._set_structure_enabled(selection_exists=True, leaf_selected=False)
+        self._show_mode_help(show_none=False, show_internal=True)
         del blockers

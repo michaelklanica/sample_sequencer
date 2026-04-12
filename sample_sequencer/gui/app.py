@@ -11,7 +11,7 @@ from audio.playback import play_once
 from audio.realtime import RealtimeLooper
 from audio.sample_library import MAX_SLOTS, SampleLibrary
 from engine.edit_policy import classify_edit, invalidation_reason
-from engine.pattern import Pattern, create_blank_pattern
+from engine.pattern import create_blank_pattern
 from engine.rhythm_tree import RhythmNode
 from sample_sequencer.gui.main_window import MainWindow
 from sequencer_io import LoadedPatternProject, load_pattern_project_from_json, save_pattern_project_to_json
@@ -36,8 +36,9 @@ class SequencerGuiApp:
                 if wav_path.exists():
                     self.sample_library.load_wav_into_slot(slot, wav_path)
 
-        self.current_bar_index = 0
-        self.selected_path = "0"
+        self.current_bar_index: int = 0
+        self.selected_node: RhythmNode | None = None
+        self.selected_node_path: str | None = None
         self.transport_mode = "bar"
         self._ui_status_message: str | None = None
 
@@ -54,9 +55,9 @@ class SequencerGuiApp:
 
     def _wire_events(self) -> None:
         w = self.window
-        w.bar_list_panel.barSelected.connect(self._select_bar)
-        w.tree_panel.nodeSelected.connect(self._select_path)
-        w.timeline_widget.blockSelected.connect(self._select_path)
+        w.bar_list_panel.barSelected.connect(self.set_current_bar)
+        w.tree_panel.nodeSelected.connect(self._on_widget_selected_node)
+        w.timeline_widget.blockSelected.connect(self._on_widget_selected_node)
         w.timeline_widget.splitRequested.connect(self._split_path)
         w.timeline_widget.clearRequested.connect(self._clear_path)
         w.timeline_widget.templateRequested.connect(self._template_stub)
@@ -64,8 +65,8 @@ class SequencerGuiApp:
         w.inspector_panel.slotChanged.connect(self._set_slot_for_selected)
         w.inspector_panel.velocityChanged.connect(self._set_velocity_for_selected)
         w.inspector_panel.pitchChanged.connect(self._set_pitch_for_selected)
-        w.inspector_panel.splitRequested.connect(lambda parts: self._split_path(self.selected_path, parts))
-        w.inspector_panel.clearRequested.connect(lambda: self._clear_path(self.selected_path))
+        w.inspector_panel.splitRequested.connect(self._split_selected)
+        w.inspector_panel.clearRequested.connect(self._clear_selected)
 
         w.slot_panel.slotClicked.connect(self._assign_slot_from_panel)
         w.slot_panel.slotDoubleClicked.connect(self._audition_slot)
@@ -89,30 +90,105 @@ class SequencerGuiApp:
     def _node_map(self) -> dict[str, RhythmNode]:
         return dict(self._iter_nodes(self.pattern.bars[self.current_bar_index].root, "0"))
 
-    def _selected_node(self) -> RhythmNode | None:
-        return self._node_map().get(self.selected_path)
+    def _path_for_node(self, target: RhythmNode | None) -> str | None:
+        if target is None:
+            return None
+        for path, node in self._node_map().items():
+            if node is target:
+                return path
+        return None
 
-    def _select_bar(self, index: int) -> None:
-        if index < 0 or index >= len(self.pattern.bars):
+    def _normalize_selection(self, path: str | None, node: RhythmNode | None) -> tuple[str | None, RhythmNode | None]:
+        node_map = self._node_map()
+        if path and path in node_map:
+            resolved = node_map[path]
+            if node is None or node is resolved:
+                return path, resolved
+        if node is not None:
+            resolved_path = self._path_for_node(node)
+            if resolved_path is not None:
+                return resolved_path, node_map[resolved_path]
+        return None, None
+
+    def set_current_bar(self, bar_index: int) -> None:
+        if bar_index < 0 or bar_index >= len(self.pattern.bars):
+            return
+        if self.current_bar_index == bar_index:
             return
         self._apply_edit_policy("select_bar")
-        self.current_bar_index = index
-        self.selected_path = "0"
-        self.refresh_ui()
+        self.current_bar_index = bar_index
+        self.clear_selection(refresh=False)
+        self.refresh_bar_views()
+        self.refresh_selection_views()
 
-    def _select_path(self, path: str) -> None:
-        if path in self._node_map():
-            self.selected_path = path
-            self.refresh_ui()
+    def set_selected_node(self, node: RhythmNode | None, path: str | None = None) -> None:
+        normalized_path, normalized_node = self._normalize_selection(path=path, node=node)
+        if self.selected_node is normalized_node and self.selected_node_path == normalized_path:
+            return
+        self.selected_node = normalized_node
+        self.selected_node_path = normalized_path
+        self.refresh_selection_views()
+
+    def clear_selection(self, refresh: bool = True) -> None:
+        if self.selected_node is None and self.selected_node_path is None:
+            return
+        self.selected_node = None
+        self.selected_node_path = None
+        if refresh:
+            self.refresh_selection_views()
+
+    def refresh_bar_views(self) -> None:
+        bar = self.pattern.bars[self.current_bar_index]
+        self.window.bar_list_panel.set_selected_bar(self.current_bar_index)
+        self.window.tree_panel.set_bar(bar, self.selected_node_path)
+        self.window.timeline_widget.set_bar(bar)
+
+    def _selected_slot_for_ui(self) -> int | None:
+        if self.selected_node is None or not self.selected_node.is_leaf():
+            return None
+        return self.selected_node.sample_slot
+
+    def refresh_selection_views(self) -> None:
+        self.window.tree_panel.set_selected_path(self.selected_node_path)
+        self.window.timeline_widget.set_selected_node(self.selected_node, self.selected_node_path)
+        self.window.inspector_panel.set_node(self.selected_node_path, self.selected_node)
+        self.window.slot_panel.set_selected_slot(self._selected_slot_for_ui())
+        self._refresh_transport()
+
+    def refresh_ui(self) -> None:
+        self.window.bar_list_panel.set_pattern(self.pattern, self.current_bar_index)
+        self.window.timeline_widget.set_sample_library(self.sample_library)
+        self.window.slot_panel.set_library(self.sample_library)
+        self.refresh_bar_views()
+        self.refresh_selection_views()
+
+    def _on_widget_selected_node(self, path: str, node: RhythmNode | None) -> None:
+        if node is None:
+            self.clear_selection()
+            return
+        self.set_selected_node(node=node, path=path)
+
+    def _split_selected(self, parts: int) -> None:
+        if self.selected_node_path is None:
+            return
+        self._split_path(self.selected_node_path, parts)
+
+    def _clear_selected(self) -> None:
+        if self.selected_node_path is None:
+            return
+        self._clear_path(self.selected_node_path)
 
     def _split_path(self, path: str, parts: int) -> None:
         node = self._node_map().get(path)
         if node is None or not node.is_leaf():
             return
         self._apply_edit_policy("split_selected")
-        node.split_equal(parts)
-        self.selected_path = path
-        self.refresh_ui()
+        children = node.split_equal(parts)
+        if children:
+            self.set_selected_node(node=children[0], path=f"{path}.0")
+        else:
+            self.clear_selection()
+        self.refresh_bar_views()
 
     def _clear_path(self, path: str) -> None:
         node = self._node_map().get(path)
@@ -120,39 +196,38 @@ class SequencerGuiApp:
             return
         self._apply_edit_policy("set_slot")
         node.assign(sample_slot=None, velocity=node.velocity, pitch_offset=node.pitch_offset)
-        self.selected_path = path
-        self.refresh_ui()
+        self.set_selected_node(node=node, path=path)
 
     def _template_stub(self, path: str) -> None:
         QMessageBox.information(self.window, "Template", f"Apply template is a stub in MVP. (path={path})")
 
     def _set_slot_for_selected(self, slot: int) -> None:
-        node = self._selected_node()
+        node = self.selected_node
         if node is None or not node.is_leaf():
             return
         self._apply_edit_policy("set_slot")
         resolved = None if slot < 0 else slot
         node.assign(sample_slot=resolved, velocity=node.velocity, pitch_offset=node.pitch_offset)
-        self.refresh_ui()
+        self.refresh_selection_views()
 
     def _set_velocity_for_selected(self, velocity: float) -> None:
-        node = self._selected_node()
+        node = self.selected_node
         if node is None or not node.is_leaf():
             return
         self._apply_edit_policy("set_velocity")
         node.assign(sample_slot=node.sample_slot, velocity=velocity, pitch_offset=node.pitch_offset)
-        self.refresh_ui()
+        self.refresh_selection_views()
 
     def _set_pitch_for_selected(self, pitch: int) -> None:
-        node = self._selected_node()
+        node = self.selected_node
         if node is None or not node.is_leaf():
             return
         self._apply_edit_policy("set_pitch_offset")
         node.assign(sample_slot=node.sample_slot, velocity=node.velocity, pitch_offset=pitch)
-        self.refresh_ui()
+        self.refresh_selection_views()
 
     def _assign_slot_from_panel(self, slot: int) -> None:
-        node = self._selected_node()
+        node = self.selected_node
         if node is None or not node.is_leaf() or slot < 0 or slot >= MAX_SLOTS:
             return
         self._set_slot_for_selected(slot)
@@ -212,7 +287,8 @@ class SequencerGuiApp:
         self.pattern_name = "Untitled"
         self.bpm = 120.0
         self.current_bar_index = 0
-        self.selected_path = "0"
+        self.selected_node = None
+        self.selected_node_path = None
         self.project_path = None
         self._ui_status_message = None
         self.refresh_ui()
@@ -308,7 +384,8 @@ class SequencerGuiApp:
                 self.sample_library.load_wav_into_slot(slot, wav_path)
         self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.bpm)
         self.current_bar_index = 0
-        self.selected_path = "0"
+        self.selected_node = None
+        self.selected_node_path = None
         self._ui_status_message = None
         self.refresh_ui()
 
@@ -348,18 +425,6 @@ class SequencerGuiApp:
             bar_chain=bar_chain,
             status=status,
         )
-
-    def refresh_ui(self) -> None:
-        bar = self.pattern.bars[self.current_bar_index]
-        selected = self._selected_node()
-        self.window.bar_list_panel.set_pattern(self.pattern, self.current_bar_index)
-        self.window.tree_panel.set_bar(bar, self.selected_path)
-        self.window.timeline_widget.set_bar(bar)
-        self.window.timeline_widget.set_sample_library(self.sample_library)
-        self.window.timeline_widget.set_selected_node(self.selected_path)
-        self.window.inspector_panel.set_node(self.selected_path, selected)
-        self.window.slot_panel.set_library(self.sample_library)
-        self._refresh_transport()
 
 
 def launch() -> None:

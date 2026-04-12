@@ -29,7 +29,7 @@ class GroupRegion:
 
 
 class TimelineWidget(QWidget):
-    blockSelected = Signal(str)
+    blockSelected = Signal(str, object)
     splitRequested = Signal(str, int)
     clearRequested = Signal(str)
     templateRequested = Signal(str)
@@ -49,10 +49,11 @@ class TimelineWidget(QWidget):
         self._hovered_node = None
         self.update()
 
-    def set_selected_node(self, node_path: str | None) -> None:
-        if self._selected_path == node_path:
+    def set_selected_node(self, node: RhythmNode | None, node_path: str | None = None) -> None:
+        selected_path = node_path if node is not None and node.is_leaf() else None
+        if self._selected_path == selected_path:
             return
-        self._selected_path = node_path
+        self._selected_path = selected_path
         self.update()
 
     def set_sample_library(self, sample_library: SampleLibrary | None) -> None:
@@ -298,7 +299,9 @@ class TimelineWidget(QWidget):
         hit = self._hit_test(event.position())
         if event.button() == Qt.MouseButton.LeftButton:
             if hit is not None:
-                self.blockSelected.emit(hit.path)
+                self.blockSelected.emit(hit.path, hit.node)
+            else:
+                self.blockSelected.emit("", None)
         if event.button() == Qt.MouseButton.RightButton and hit is not None:
             self._open_context_menu(event.globalPosition().toPoint(), hit)
 

@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QSlider,
     QSpinBox,
@@ -30,6 +29,7 @@ class InspectorPanel(QWidget):
         super().__init__()
         self._path = QLabel("-")
         self._duration = QLabel("-")
+        self._node_type = QLabel("None")
         self._slot_combo = QComboBox()
         self._slot_combo.addItem("None", None)
         for slot in range(MAX_SLOTS):
@@ -46,6 +46,7 @@ class InspectorPanel(QWidget):
         info_form = QFormLayout(info_group)
         info_form.addRow("Path", self._path)
         info_form.addRow("Duration", self._duration)
+        info_form.addRow("Type", self._node_type)
 
         sample_group = QGroupBox("Sample Controls")
         sample_form = QFormLayout(sample_group)
@@ -56,14 +57,16 @@ class InspectorPanel(QWidget):
         action_group = QGroupBox("Actions")
         action_layout = QVBoxLayout(action_group)
         split_row = QHBoxLayout()
+        self._split_buttons: list[QPushButton] = []
         for parts in (2, 3, 4):
             btn = QPushButton(f"Split {parts}")
             btn.clicked.connect(lambda _checked=False, p=parts: self.splitRequested.emit(p))
             split_row.addWidget(btn)
+            self._split_buttons.append(btn)
         action_layout.addLayout(split_row)
-        clear_btn = QPushButton("Clear")
-        clear_btn.clicked.connect(self.clearRequested.emit)
-        action_layout.addWidget(clear_btn)
+        self._clear_btn = QPushButton("Clear")
+        self._clear_btn.clicked.connect(self.clearRequested.emit)
+        action_layout.addWidget(self._clear_btn)
 
         main.addWidget(info_group)
         main.addWidget(sample_group)
@@ -81,20 +84,49 @@ class InspectorPanel(QWidget):
             return
         self.slotChanged.emit(int(value))
 
-    def set_node(self, path: str, node: RhythmNode | None) -> None:
+    def _set_leaf_controls_enabled(self, enabled: bool) -> None:
+        self._slot_combo.setEnabled(enabled)
+        self._velocity.setEnabled(enabled)
+        self._pitch.setEnabled(enabled)
+        self._clear_btn.setEnabled(enabled)
+
+    def set_node(self, path: str | None, node: RhythmNode | None) -> None:
         blockers = [
             QSignalBlocker(self._slot_combo),
             QSignalBlocker(self._velocity),
             QSignalBlocker(self._pitch),
         ]
-        self._path.setText(path if node is not None else "-")
+        self._path.setText(path if node is not None and path else "-")
+
         if node is None:
             self._duration.setText("-")
+            self._node_type.setText("None")
+            self._slot_combo.setCurrentIndex(0)
+            self._velocity.setValue(100)
+            self._pitch.setValue(0)
+            self._set_leaf_controls_enabled(False)
+            for btn in self._split_buttons:
+                btn.setEnabled(False)
             del blockers
             return
 
         self._duration.setText(f"{node.duration_fraction:.6f}")
-        self._slot_combo.setCurrentIndex(0 if node.sample_slot is None else node.sample_slot + 1)
-        self._velocity.setValue(int(round(node.velocity * 100)))
-        self._pitch.setValue(int(node.pitch_offset))
+        if node.is_leaf():
+            self._node_type.setText("Leaf")
+            self._slot_combo.setCurrentIndex(0 if node.sample_slot is None else node.sample_slot + 1)
+            self._velocity.setValue(int(round(node.velocity * 100)))
+            self._pitch.setValue(int(node.pitch_offset))
+            self._set_leaf_controls_enabled(True)
+            for btn in self._split_buttons:
+                btn.setEnabled(True)
+            del blockers
+            return
+
+        self._node_type.setText("Internal")
+        self._slot_combo.setCurrentIndex(0)
+        self._velocity.setValue(100)
+        self._pitch.setValue(0)
+        self._set_leaf_controls_enabled(False)
+        for btn in self._split_buttons:
+            btn.setEnabled(False)
         del blockers

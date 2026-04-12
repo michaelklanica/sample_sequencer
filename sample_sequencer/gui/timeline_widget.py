@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QMenu, QToolTip, QWidget
 
 from audio.sample_library import SampleLibrary
@@ -307,21 +307,53 @@ class TimelineWidget(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and hit is not None:
             self.splitRequested.emit(hit.path, 2)
 
+    def _selected_info_label(self, node: RhythmNode) -> str:
+        if not node.is_leaf():
+            return "Selected: Internal Group"
+        if node.sample_slot is None:
+            return "Selected: Rest"
+        return f"Selected: Slot {node.sample_slot}"
+
+    def _add_selection_info(self, menu: QMenu, node: RhythmNode) -> None:
+        info_action = menu.addAction(self._selected_info_label(node))
+        info_action.setEnabled(False)
+        menu.addSeparator()
+
+    def _add_split_actions(self, menu: QMenu, path: str) -> None:
+        split_two_action = menu.addAction("Split into 2")
+        split_two_action.triggered.connect(lambda: self.splitRequested.emit(path, 2))
+
+        split_three_action = menu.addAction("Split into 3")
+        split_three_action.triggered.connect(lambda: self.splitRequested.emit(path, 3))
+
+        split_menu = menu.addMenu("Split More")
+        for parts in (4, 5, 6):
+            action = split_menu.addAction(f"Split into {parts}")
+            action.triggered.connect(lambda _checked=False, p=parts: self.splitRequested.emit(path, p))
+
+    def _add_template_actions(self, menu: QMenu, path: str) -> None:
+        template_menu = menu.addMenu("Apply Template")
+        apply_template_action = template_menu.addAction("Apply Template…")
+        apply_template_action.triggered.connect(lambda: self.templateRequested.emit(path))
+
+    def _build_leaf_context_menu(self, menu: QMenu, hit: LeafHit) -> None:
+        self._add_split_actions(menu, hit.path)
+        self._add_template_actions(menu, hit.path)
+        menu.addSeparator()
+
+        set_rest_action = menu.addAction("Set Rest")
+        set_rest_action.triggered.connect(lambda: self.clearRequested.emit(hit.path))
+
+    def _build_internal_context_menu(self, menu: QMenu, hit: LeafHit) -> None:
+        del menu
+        del hit
+
     def _open_context_menu(self, global_pos: QPoint, hit: LeafHit) -> None:
         menu = QMenu(self)
-
-        split_menu = menu.addMenu("Split")
-        for parts in (2, 3, 4, 5, 6):
-            action = QAction(str(parts), self)
-            action.triggered.connect(lambda _checked=False, p=parts: self.splitRequested.emit(hit.path, p))
-            split_menu.addAction(action)
-
-        clear_action = QAction("Clear", self)
-        clear_action.triggered.connect(lambda: self.clearRequested.emit(hit.path))
-        menu.addAction(clear_action)
-
-        template_action = QAction("Apply Template (stub)", self)
-        template_action.triggered.connect(lambda: self.templateRequested.emit(hit.path))
-        menu.addAction(template_action)
+        self._add_selection_info(menu, hit.node)
+        if hit.node.is_leaf():
+            self._build_leaf_context_menu(menu, hit)
+        else:
+            self._build_internal_context_menu(menu, hit)
 
         menu.exec(global_pos)

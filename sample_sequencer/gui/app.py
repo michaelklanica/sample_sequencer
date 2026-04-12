@@ -68,7 +68,8 @@ class SequencerGuiApp:
         w.inspector_panel.velocityChanged.connect(self._set_velocity_for_selected)
         w.inspector_panel.pitchChanged.connect(self._set_pitch_for_selected)
         w.inspector_panel.splitRequested.connect(self._split_selected)
-        w.inspector_panel.clearRequested.connect(self._clear_selected)
+        w.inspector_panel.clearRequested.connect(self._reset_selected_subtree)
+        w.inspector_panel.templateRequested.connect(self._apply_template_to_selected)
 
         w.slot_panel.slotClicked.connect(self._assign_slot_from_panel)
         w.slot_panel.slotDoubleClicked.connect(self._audition_slot)
@@ -158,7 +159,7 @@ class SequencerGuiApp:
     def refresh_selection_views(self) -> None:
         self.window.tree_panel.set_selected_path(self.selected_node_path)
         self.window.timeline_widget.set_selected_node(self.selected_node, self.selected_node_path)
-        self.window.inspector_panel.set_node(self.selected_node_path, self.selected_node)
+        self.window.inspector_panel.set_node(self.current_bar_index, self.selected_node_path, self.selected_node)
         self.window.slot_panel.set_assignment_enabled(self._selected_leaf() is not None)
         self.window.slot_panel.set_selected_slot(self._selected_slot_for_ui())
         self._refresh_transport()
@@ -167,6 +168,7 @@ class SequencerGuiApp:
         self.window.bar_list_panel.set_pattern(self.pattern, self.current_bar_index)
         self.window.timeline_widget.set_sample_library(self.sample_library)
         self.window.slot_panel.set_library(self.sample_library)
+        self.window.inspector_panel.set_sample_library(self.sample_library)
         self.refresh_bar_views()
         self.refresh_selection_views()
 
@@ -181,12 +183,38 @@ class SequencerGuiApp:
             return
         self._split_path(self.selected_node_path, parts)
 
-    def _clear_selected(self) -> None:
-        selected = self._selected_leaf()
-        if selected is None:
+    def _apply_template_to_selected(self) -> None:
+        if self.selected_node_path is None:
             return
-        path, _node = selected
-        self._clear_path(path)
+        self._template_stub(self.selected_node_path)
+
+    def _iter_leaf_nodes(self, node: RhythmNode) -> list[RhythmNode]:
+        if node.is_leaf():
+            return [node]
+        leaves: list[RhythmNode] = []
+        for child in node.children:
+            leaves.extend(self._iter_leaf_nodes(child))
+        return leaves
+
+    def _reset_selected_subtree(self) -> None:
+        if self.selected_node_path is None:
+            return
+        node = self._node_map().get(self.selected_node_path)
+        if node is None:
+            return
+        leaves = self._iter_leaf_nodes(node)
+        changed = False
+        for leaf in leaves:
+            if leaf.sample_slot is not None or abs(leaf.velocity - 1.0) > 1e-9 or leaf.pitch_offset != 0:
+                leaf.assign(sample_slot=None, velocity=1.0, pitch_offset=0)
+                changed = True
+        if not changed:
+            return
+        self._apply_edit_policy("clear_selected")
+        self._is_dirty = True
+        self.refresh_bar_views()
+        self.refresh_selection_views()
+        self._set_ui_status("Reset selected subtree to rest events")
 
     def _split_path(self, path: str, parts: int) -> None:
         node = self._node_map().get(path)

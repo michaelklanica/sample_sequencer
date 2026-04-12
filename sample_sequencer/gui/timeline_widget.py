@@ -7,7 +7,7 @@ from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QMenu, QToolTip, QWidget
 
-from audio.sample_library import SampleLibrary
+from audio.sample_library import MAX_SLOTS, SampleLibrary
 from engine.pattern import Bar
 from engine.rhythm_tree import RhythmNode
 
@@ -32,6 +32,7 @@ class TimelineWidget(QWidget):
     blockSelected = Signal(str, object)
     splitRequested = Signal(str, int)
     clearRequested = Signal(str)
+    slotAssignRequested = Signal(str, int)
     templateRequested = Signal(str)
 
     def __init__(self) -> None:
@@ -344,8 +345,16 @@ class TimelineWidget(QWidget):
         self._add_template_actions(menu, hit.path)
         menu.addSeparator()
 
+        assign_menu = menu.addMenu("Assign Slot")
+        for slot in range(MAX_SLOTS):
+            action = assign_menu.addAction(f"Slot {slot}")
+            action.triggered.connect(lambda _checked=False, s=slot: self.slotAssignRequested.emit(hit.path, s))
+
+        menu.addSeparator()
         set_rest_action = menu.addAction("Set Rest")
         set_rest_action.triggered.connect(lambda: self.clearRequested.emit(hit.path))
+        clear_assignment_action = menu.addAction("Clear Assignment")
+        clear_assignment_action.triggered.connect(lambda: self.clearRequested.emit(hit.path))
 
     def _build_internal_context_menu(self, menu: QMenu, hit: LeafHit) -> None:
         del menu

@@ -41,6 +41,7 @@ class SequencerGuiApp:
         self.selected_node_path: str | None = None
         self.transport_mode = "bar"
         self._ui_status_message: str | None = None
+        self._is_dirty = False
 
         self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.bpm)
 
@@ -60,6 +61,7 @@ class SequencerGuiApp:
         w.timeline_widget.blockSelected.connect(self._on_widget_selected_node)
         w.timeline_widget.splitRequested.connect(self._split_path)
         w.timeline_widget.clearRequested.connect(self._clear_path)
+        w.timeline_widget.slotAssignRequested.connect(self._assign_slot_to_path)
         w.timeline_widget.templateRequested.connect(self._template_stub)
 
         w.inspector_panel.slotChanged.connect(self._set_slot_for_selected)
@@ -148,10 +150,16 @@ class SequencerGuiApp:
             return None
         return self.selected_node.sample_slot
 
+    def _selected_leaf(self) -> tuple[str, RhythmNode] | None:
+        if self.selected_node is None or self.selected_node_path is None or not self.selected_node.is_leaf():
+            return None
+        return self.selected_node_path, self.selected_node
+
     def refresh_selection_views(self) -> None:
         self.window.tree_panel.set_selected_path(self.selected_node_path)
         self.window.timeline_widget.set_selected_node(self.selected_node, self.selected_node_path)
         self.window.inspector_panel.set_node(self.selected_node_path, self.selected_node)
+        self.window.slot_panel.set_assignment_enabled(self._selected_leaf() is not None)
         self.window.slot_panel.set_selected_slot(self._selected_slot_for_ui())
         self._refresh_transport()
 
@@ -174,9 +182,11 @@ class SequencerGuiApp:
         self._split_path(self.selected_node_path, parts)
 
     def _clear_selected(self) -> None:
-        if self.selected_node_path is None:
+        selected = self._selected_leaf()
+        if selected is None:
             return
-        self._clear_path(self.selected_node_path)
+        path, _node = selected
+        self._clear_path(path)
 
     def _split_path(self, path: str, parts: int) -> None:
         node = self._node_map().get(path)
@@ -194,43 +204,98 @@ class SequencerGuiApp:
         node = self._node_map().get(path)
         if node is None or not node.is_leaf():
             return
-        self._apply_edit_policy("set_slot")
-        node.assign(sample_slot=None, velocity=node.velocity, pitch_offset=node.pitch_offset)
-        self.set_selected_node(node=node, path=path)
+        self._set_leaf_sample_slot(node=node, path=path, slot=None, status_message="Set selected leaf to rest")
+
+    def _assign_slot_to_path(self, path: str, slot: int) -> None:
+        node = self._node_map().get(path)
+        if node is None or not node.is_leaf():
+            return
+        if slot < 0 or slot >= MAX_SLOTS:
+            return
+        self._set_leaf_sample_slot(node=node, path=path, slot=slot, status_message=f"Assigned slot {slot} to selected leaf")
 
     def _template_stub(self, path: str) -> None:
         QMessageBox.information(self.window, "Template", f"Apply template is a stub in MVP. (path={path})")
 
     def _set_slot_for_selected(self, slot: int) -> None:
-        node = self.selected_node
-        if node is None or not node.is_leaf():
+        resolved = None if slot < 0 else slot
+        self.set_selected_leaf_sample_slot(resolved)
+
+    def set_selected_leaf_sample_slot(self, slot: int | None) -> None:
+        selected = self._selected_leaf()
+        if selected is None:
+            self._set_ui_status("Select a leaf block to assign a slot.")
+            return
+        path, node = selected
+        if slot is not None and (slot < 0 or slot >= MAX_SLOTS):
+            return
+        msg = "Set selected leaf to rest" if slot is None else f"Assigned slot {slot} to selected leaf"
+        self._set_leaf_sample_slot(node=node, path=path, slot=slot, status_message=msg)
+
+    def _set_leaf_sample_slot(self, node: RhythmNode, path: str, slot: int | None, status_message: str) -> None:
+        if node.sample_slot == slot:
             return
         self._apply_edit_policy("set_slot")
-        resolved = None if slot < 0 else slot
-        node.assign(sample_slot=resolved, velocity=node.velocity, pitch_offset=node.pitch_offset)
-        self.refresh_selection_views()
+        node.assign(sample_slot=slot, velocity=node.velocity, pitch_offset=node.pitch_offset)
+        self._apply_leaf_value_changes(node=node, path=path, status_message=status_message)
 
     def _set_velocity_for_selected(self, velocity: float) -> None:
-        node = self.selected_node
-        if node is None or not node.is_leaf():
+        self.set_selected_leaf_velocity(velocity)
+
+    def set_selected_leaf_velocity(self, velocity: float) -> None:
+        selected = self._selected_leaf()
+        if selected is None:
+            return
+        path, node = selected
+        if abs(node.velocity - velocity) < 1e-9:
             return
         self._apply_edit_policy("set_velocity")
         node.assign(sample_slot=node.sample_slot, velocity=velocity, pitch_offset=node.pitch_offset)
-        self.refresh_selection_views()
+        self._apply_leaf_value_changes(node=node, path=path, status_message=f"Updated velocity to {velocity:.2f}")
 
     def _set_pitch_for_selected(self, pitch: int) -> None:
-        node = self.selected_node
-        if node is None or not node.is_leaf():
+        self.set_selected_leaf_pitch_offset(pitch)
+
+    def set_selected_leaf_pitch_offset(self, pitch: int) -> None:
+        selected = self._selected_leaf()
+        if selected is None:
+            return
+        path, node = selected
+        if node.pitch_offset == pitch:
             return
         self._apply_edit_policy("set_pitch_offset")
         node.assign(sample_slot=node.sample_slot, velocity=node.velocity, pitch_offset=pitch)
+        self._apply_leaf_value_changes(node=node, path=path, status_message=f"Updated pitch offset to {pitch}")
+
+    def set_selected_leaf_rest_state(self, is_rest: bool) -> None:
+        if is_rest:
+            self.set_selected_leaf_sample_slot(None)
+            return
+        selected = self._selected_leaf()
+        if selected is None:
+            self._set_ui_status("Select a leaf block before clearing rest.")
+            return
+        _path, node = selected
+        fallback_slot = 0 if self.sample_library.slots and self.sample_library.slots[0] is not None else None
+        slot = node.sample_slot if node.sample_slot is not None else fallback_slot
+        self.set_selected_leaf_sample_slot(slot)
+
+    def _apply_leaf_value_changes(self, node: RhythmNode, path: str, status_message: str | None = None) -> None:
+        self._is_dirty = True
+        self.selected_node = node
+        self.selected_node_path = path
+        self.refresh_bar_views()
         self.refresh_selection_views()
+        if status_message:
+            self._set_ui_status(status_message)
 
     def _assign_slot_from_panel(self, slot: int) -> None:
-        node = self.selected_node
-        if node is None or not node.is_leaf() or slot < 0 or slot >= MAX_SLOTS:
+        if slot < 0 or slot >= MAX_SLOTS:
             return
-        self._set_slot_for_selected(slot)
+        if self._selected_leaf() is None:
+            self._set_ui_status("Cannot assign slot: select a leaf block.")
+            return
+        self.set_selected_leaf_sample_slot(slot)
 
     def _audition_slot(self, slot: int) -> None:
         sample = self.sample_library.slots[slot]
@@ -289,6 +354,7 @@ class SequencerGuiApp:
         self.current_bar_index = 0
         self.selected_node = None
         self.selected_node_path = None
+        self._is_dirty = False
         self.project_path = None
         self._ui_status_message = None
         self.refresh_ui()
@@ -366,6 +432,8 @@ class SequencerGuiApp:
             sample_folder=self.sample_folder,
             sample_library=self.sample_library,
         )
+        self._is_dirty = False
+        self._set_ui_status(f"Saved {self.project_path.name}")
 
     def _load_project(self) -> None:
         selected = QFileDialog.getOpenFileName(self.window, "Load Pattern", "", "JSON (*.json)")[0]
@@ -386,6 +454,7 @@ class SequencerGuiApp:
         self.current_bar_index = 0
         self.selected_node = None
         self.selected_node_path = None
+        self._is_dirty = False
         self._ui_status_message = None
         self.refresh_ui()
 
@@ -418,6 +487,8 @@ class SequencerGuiApp:
         else:
             bar_chain = f"Bar: {self.current_bar_index}"
         status = self._ui_status_message or snap.status_message or "Ready"
+        if self._is_dirty and not status.endswith("• unsaved"):
+            status = f"{status} • unsaved"
         self.window.transport_panel.set_values(
             state=state,
             mode=mode,

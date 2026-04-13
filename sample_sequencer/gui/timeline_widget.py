@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QMenu, QToolTip, QWidget
 from audio.sample_library import MAX_SLOTS, SampleLibrary
 from engine.pattern import Bar
 from engine.rhythm_tree import RhythmNode
+from sample_sequencer.gui.template_defs import TEMPLATE_DEFINITIONS
 
 
 @dataclass(frozen=True)
@@ -33,7 +34,7 @@ class TimelineWidget(QWidget):
     splitRequested = Signal(str, int)
     clearRequested = Signal(str)
     slotAssignRequested = Signal(str, int)
-    templateRequested = Signal(str)
+    templateRequested = Signal(str, str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -368,8 +369,13 @@ class TimelineWidget(QWidget):
 
     def _add_template_actions(self, menu: QMenu, path: str) -> None:
         template_menu = menu.addMenu("Apply Template")
-        apply_template_action = template_menu.addAction("Apply Template…")
-        apply_template_action.triggered.connect(lambda: self.templateRequested.emit(path))
+        for index, definition in enumerate(TEMPLATE_DEFINITIONS):
+            if index == 5:
+                template_menu.addSeparator()
+            action = template_menu.addAction(definition.label)
+            action.triggered.connect(
+                lambda _checked=False, template_id=definition.template_id: self.templateRequested.emit(path, template_id)
+            )
 
     def _build_leaf_context_menu(self, menu: QMenu, hit: LeafHit) -> None:
         self._add_split_actions(menu, hit.path)

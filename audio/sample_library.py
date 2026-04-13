@@ -26,6 +26,7 @@ class SampleLibrary:
 
     def __init__(self) -> None:
         self.slots: list[SampleData | None] = [None] * MAX_SLOTS
+        self._choke_groups: list[int | None] = [None] * MAX_SLOTS
         self.sample_rate: int | None = None
 
     def _validate_slot(self, slot: int) -> None:
@@ -69,6 +70,28 @@ class SampleLibrary:
         if data is None:
             raise ValueError(f"No sample loaded in slot {slot}.")
         return data
+
+    def set_choke_group(self, slot: int, choke_group: int | None) -> None:
+        self._validate_slot(slot)
+        if choke_group is not None and choke_group <= 0:
+            raise ValueError("choke_group must be a positive integer or None.")
+        self._choke_groups[slot] = choke_group
+
+    def choke_group(self, slot: int) -> int | None:
+        self._validate_slot(slot)
+        return self._choke_groups[slot]
+
+    def serialized_choke_groups(self) -> dict[str, int]:
+        payload: dict[str, int] = {}
+        for slot, group in enumerate(self._choke_groups):
+            if group is None:
+                continue
+            payload[str(slot)] = int(group)
+        return payload
+
+    def apply_serialized_choke_groups(self, payload: dict[int, int | None]) -> None:
+        for slot, group in payload.items():
+            self.set_choke_group(slot, group)
 
     def loaded_slots(self) -> list[int]:
         return [i for i, s in enumerate(self.slots) if s is not None]

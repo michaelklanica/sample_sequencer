@@ -30,6 +30,7 @@ class InspectorPanel(QWidget):
     clearRequested = Signal()
     templateRequested = Signal(str)
     bpmChanged = Signal(float)
+    chokeGroupChanged = Signal(int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -57,6 +58,10 @@ class InspectorPanel(QWidget):
 
         self._pitch = QSpinBox()
         self._pitch.setRange(-24, 24)
+        self._choke_group = QComboBox()
+        self._choke_group.addItem("None", 0)
+        for group_id in range(1, 9):
+            self._choke_group.addItem(str(group_id), group_id)
 
         self._rest_note = QLabel("")
         self._rest_note.setWordWrap(True)
@@ -89,6 +94,7 @@ class InspectorPanel(QWidget):
         event_form.addRow("Velocity", velocity_row_widget)
 
         event_form.addRow("Pitch Offset", self._pitch)
+        event_form.addRow("Choke Group", self._choke_group)
         event_form.addRow(self._set_rest_btn)
         event_form.addRow(self._rest_note)
 
@@ -151,6 +157,7 @@ class InspectorPanel(QWidget):
         self._slot_combo.currentIndexChanged.connect(self._emit_slot)
         self._velocity.valueChanged.connect(self._on_velocity_changed)
         self._pitch.valueChanged.connect(self.pitchChanged.emit)
+        self._choke_group.currentIndexChanged.connect(self._emit_choke_group)
         self._set_rest_btn.clicked.connect(self._set_rest)
         self._template_combo.currentIndexChanged.connect(self._update_template_description)
         self._bpm.valueChanged.connect(self.bpmChanged.emit)
@@ -200,6 +207,10 @@ class InspectorPanel(QWidget):
             return
         self.slotChanged.emit(int(value))
 
+    def _emit_choke_group(self) -> None:
+        value = self._choke_group.currentData()
+        self.chokeGroupChanged.emit(int(value) if isinstance(value, int) else 0)
+
     def _emit_selected_template(self) -> None:
         template_id = self._template_combo.currentData()
         if isinstance(template_id, str):
@@ -220,7 +231,15 @@ class InspectorPanel(QWidget):
         self._slot_combo.setEnabled(enabled)
         self._velocity.setEnabled(enabled)
         self._pitch.setEnabled(enabled)
+        self._choke_group.setEnabled(enabled)
         self._set_rest_btn.setEnabled(enabled)
+
+    def set_selected_slot_choke_group(self, choke_group: int | None) -> None:
+        blocker = QSignalBlocker(self._choke_group)
+        value = 0 if choke_group is None else int(choke_group)
+        index = self._choke_group.findData(value)
+        self._choke_group.setCurrentIndex(0 if index < 0 else index)
+        del blocker
 
     def _set_structure_enabled(self, selection_exists: bool, leaf_selected: bool) -> None:
         for btn in self._split_buttons:
@@ -241,6 +260,7 @@ class InspectorPanel(QWidget):
             QSignalBlocker(self._slot_combo),
             QSignalBlocker(self._velocity),
             QSignalBlocker(self._pitch),
+            QSignalBlocker(self._choke_group),
         ]
 
         if node is None:
@@ -250,6 +270,7 @@ class InspectorPanel(QWidget):
             self._velocity.setValue(100)
             self._velocity_value.setText("1.00")
             self._pitch.setValue(0)
+            self._choke_group.setCurrentIndex(0)
             self._rest_note.setText("")
             self._template_desc.setText("Select a leaf to apply a template.")
             self._set_leaf_controls_enabled(False)
@@ -271,6 +292,7 @@ class InspectorPanel(QWidget):
             self._velocity.setValue(int(round(node.velocity * 100)))
             self._velocity_value.setText(f"{node.velocity:.2f}")
             self._pitch.setValue(int(node.pitch_offset))
+            self._choke_group.setCurrentIndex(0)
             self._rest_note.setText("This leaf is currently a rest." if node.sample_slot is None else "")
             self._internal_info.setText("Internal group details will appear here.")
             self._update_template_description()
@@ -286,6 +308,7 @@ class InspectorPanel(QWidget):
         self._velocity.setValue(100)
         self._velocity_value.setText("1.00")
         self._pitch.setValue(0)
+        self._choke_group.setCurrentIndex(0)
         self._rest_note.setText("")
         self._template_desc.setText("Templates can only be applied to leaf nodes.")
         child_count = len(node.children)

@@ -28,6 +28,8 @@ def _load_library_for_project(pattern_json: Path) -> tuple[LoadedPatternProject,
     for slot, wav_path in sorted(project.sample_slot_files.items()):
         if wav_path.exists():
             library.load_wav_into_slot(slot, wav_path)
+    for slot, choke_group in sorted(project.slot_choke_groups.items()):
+        library.set_choke_group(slot, choke_group)
     return project, library
 
 

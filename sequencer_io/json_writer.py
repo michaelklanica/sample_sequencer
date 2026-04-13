@@ -67,6 +67,9 @@ def save_pattern_project_to_json(
             for bar in pattern.bars
         ],
     }
+    slot_choke_groups = sample_library.serialized_choke_groups()
+    if slot_choke_groups:
+        data["slot_choke_groups"] = slot_choke_groups
     if pattern.playback_order is not None:
         data["playback_order"] = list(pattern.playback_order)
 

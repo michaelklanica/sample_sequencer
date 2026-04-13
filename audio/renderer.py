@@ -17,35 +17,96 @@ class RenderResult:
     duration_seconds: float
 
 
+@dataclass
+class OfflineVoice:
+    audio: np.ndarray
+    frame_position: int
+    gain: float
+    choke_group: int | None
+    choke_fade_remaining_samples: int = 0
+    choke_fade_total_samples: int = 0
+
+
 class OfflineRenderer:
     """Simple offline one-pass renderer for one-pattern output."""
+    CHOKE_FADE_MS = 5.0
 
     def __init__(self, headroom_gain: float = 0.9) -> None:
         if not (0.0 < headroom_gain <= 1.0):
             raise ValueError("headroom_gain must be in (0,1].")
         self.headroom_gain = headroom_gain
 
-    def _render_into_buffer(self, output: np.ndarray, sample_library: SampleLibrary, start_seconds: float, sample_slot: int, velocity: float) -> None:
-        sr = sample_library.sample_rate
-        if sr is None:
-            raise ValueError("Sample library has no sample_rate; load at least one sample first.")
-        out_channels = sample_library.output_channels()
-
-        sample = sample_library.get(sample_slot)
-        start_frame = int(round(start_seconds * sr))
+    def _prepare_voice(
+        self,
+        sample_library: SampleLibrary,
+        sample_slot: int,
+        velocity: float,
+        out_channels: int,
+    ) -> OfflineVoice | None:
+        try:
+            sample = sample_library.get(sample_slot)
+        except ValueError:
+            return None
 
         src = sample.audio
         if src.shape[1] == 1 and out_channels == 2:
             src = np.repeat(src, repeats=2, axis=1)
         if src.shape[1] == 2 and out_channels == 1:
             src = src.mean(axis=1, keepdims=True)
+        return OfflineVoice(
+            audio=src,
+            frame_position=0,
+            gain=float(velocity),
+            choke_group=sample_library.choke_group(sample_slot),
+        )
 
-        src = src * float(velocity)
-        end_frame = min(output.shape[0], start_frame + src.shape[0])
-        if end_frame <= start_frame:
+    def _choke_voices(
+        self,
+        voices: list[OfflineVoice],
+        choke_group: int | None,
+        fade_samples: int,
+    ) -> None:
+        if choke_group is None:
             return
+        for voice in voices:
+            if voice.choke_group != choke_group:
+                continue
+            voice.choke_fade_total_samples = fade_samples
+            if voice.choke_fade_remaining_samples <= 0:
+                voice.choke_fade_remaining_samples = fade_samples
 
-        output[start_frame:end_frame, :] += src[: end_frame - start_frame, :]
+    def _mix_voice_span(self, output: np.ndarray, start_frame: int, end_frame: int, voices: list[OfflineVoice]) -> list[OfflineVoice]:
+        if not voices or end_frame <= start_frame:
+            return voices
+        length = end_frame - start_frame
+        mixed = np.zeros((length, output.shape[1]), dtype=np.float32)
+        next_voices: list[OfflineVoice] = []
+        for voice in voices:
+            remaining = voice.audio.shape[0] - voice.frame_position
+            if remaining <= 0:
+                continue
+            take = min(length, remaining)
+            src = voice.audio[voice.frame_position : voice.frame_position + take, :]
+            scaled = src * voice.gain
+            if voice.choke_fade_remaining_samples > 0 and voice.choke_fade_total_samples > 0:
+                fade_take = min(take, voice.choke_fade_remaining_samples)
+                fade_curve = (
+                    np.arange(voice.choke_fade_remaining_samples, voice.choke_fade_remaining_samples - fade_take, -1)
+                    / float(voice.choke_fade_total_samples)
+                ).astype(np.float32, copy=False)
+                scaled[:fade_take, :] *= fade_curve[:, np.newaxis]
+                if fade_take < take:
+                    scaled[fade_take:, :] = 0.0
+                voice.choke_fade_remaining_samples = max(0, voice.choke_fade_remaining_samples - take)
+
+            mixed[:take, :] += scaled
+            voice.frame_position += take
+            if voice.frame_position < voice.audio.shape[0] and (
+                voice.choke_fade_total_samples == 0 or voice.choke_fade_remaining_samples > 0
+            ):
+                next_voices.append(voice)
+        output[start_frame:end_frame, :] += mixed
+        return next_voices
 
     def _render_events(
         self,
@@ -60,15 +121,25 @@ class OfflineRenderer:
         out_channels = sample_library.output_channels()
         total_frames = max(1, int(np.ceil(total_seconds * sr)))
         output = np.zeros((total_frames, out_channels), dtype=np.float32)
+        fade_samples = max(1, int(sr * self.CHOKE_FADE_MS / 1000.0))
+        sorted_events = sorted(events, key=lambda event: event.start_seconds)
+        voices: list[OfflineVoice] = []
+        render_cursor = 0
 
-        for event in events:
+        for event in sorted_events:
+            event_frame = int(round(event.start_seconds * sr))
+            event_frame = max(0, min(total_frames, event_frame))
+            voices = self._mix_voice_span(output, render_cursor, event_frame, voices)
+            render_cursor = event_frame
             if event.sample_slot is None:
                 continue
-            try:
-                self._render_into_buffer(output, sample_library, event.start_seconds, event.sample_slot, event.velocity)
-            except KeyError:
-                # Missing sample slots are skipped to keep rendering resilient in editing workflows.
+            voice = self._prepare_voice(sample_library, event.sample_slot, event.velocity, out_channels)
+            if voice is None:
                 continue
+            self._choke_voices(voices, voice.choke_group, fade_samples)
+            voices.append(voice)
+
+        self._mix_voice_span(output, render_cursor, total_frames, voices)
 
         output *= self.headroom_gain
         peak = float(np.max(np.abs(output))) if output.size > 0 else 0.0

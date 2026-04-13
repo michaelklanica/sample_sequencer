@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from audio.sample_library import MAX_SLOTS, SampleLibrary
 from engine.rhythm_tree import RhythmNode
+from sample_sequencer.gui.template_defs import COMMON_TEMPLATE_IDS, TEMPLATE_BY_ID, TEMPLATE_DEFINITIONS
 
 
 class InspectorPanel(QWidget):
@@ -26,7 +27,7 @@ class InspectorPanel(QWidget):
     pitchChanged = Signal(int)
     splitRequested = Signal(int)
     clearRequested = Signal()
-    templateRequested = Signal()
+    templateRequested = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -91,11 +92,38 @@ class InspectorPanel(QWidget):
             split_row.addWidget(btn)
             self._split_buttons.append(btn)
         structure_layout.addLayout(split_row)
+
+        template_group = QGroupBox("Templates")
+        template_layout = QVBoxLayout(template_group)
+        quick_row = QHBoxLayout()
+        self._template_quick_buttons: list[tuple[str, QPushButton]] = []
+        for template_id in COMMON_TEMPLATE_IDS:
+            definition = TEMPLATE_BY_ID[template_id]
+            label = definition.label.split()[-1] if "Straight" in definition.label else "3T"
+            btn = QPushButton(label)
+            btn.setToolTip(definition.label)
+            btn.clicked.connect(lambda _checked=False, tid=template_id: self.templateRequested.emit(tid))
+            quick_row.addWidget(btn)
+            self._template_quick_buttons.append((template_id, btn))
+        template_layout.addLayout(quick_row)
+
+        template_picker_row = QHBoxLayout()
+        self._template_combo = QComboBox()
+        for definition in TEMPLATE_DEFINITIONS:
+            self._template_combo.addItem(definition.label, definition.template_id)
         self._template_btn = QPushButton("Apply Template")
-        self._template_btn.clicked.connect(self.templateRequested.emit)
+        self._template_btn.clicked.connect(self._emit_selected_template)
+        template_picker_row.addWidget(self._template_combo, 1)
+        template_picker_row.addWidget(self._template_btn)
+        template_layout.addLayout(template_picker_row)
+
+        self._template_desc = QLabel("Select a leaf to apply a template.")
+        self._template_desc.setWordWrap(True)
+        template_layout.addWidget(self._template_desc)
+
         self._clear_btn = QPushButton("Reset Subtree")
         self._clear_btn.clicked.connect(self.clearRequested.emit)
-        structure_layout.addWidget(self._template_btn)
+        structure_layout.addWidget(template_group)
         structure_layout.addWidget(self._clear_btn)
 
         info_group = QGroupBox("Internal Info / Help")
@@ -113,6 +141,7 @@ class InspectorPanel(QWidget):
         self._velocity.valueChanged.connect(self._on_velocity_changed)
         self._pitch.valueChanged.connect(self.pitchChanged.emit)
         self._set_rest_btn.clicked.connect(self._set_rest)
+        self._template_combo.currentIndexChanged.connect(self._update_template_description)
 
         self._set_leaf_controls_enabled(False)
         self._set_structure_enabled(selection_exists=False, leaf_selected=False)
@@ -154,6 +183,22 @@ class InspectorPanel(QWidget):
             return
         self.slotChanged.emit(int(value))
 
+    def _emit_selected_template(self) -> None:
+        template_id = self._template_combo.currentData()
+        if isinstance(template_id, str):
+            self.templateRequested.emit(template_id)
+
+    def _update_template_description(self) -> None:
+        template_id = self._template_combo.currentData()
+        if not isinstance(template_id, str):
+            self._template_desc.setText("Select a leaf to apply a template.")
+            return
+        definition = TEMPLATE_BY_ID.get(template_id)
+        if definition is None:
+            self._template_desc.setText("Select a leaf to apply a template.")
+            return
+        self._template_desc.setText(definition.description)
+
     def _set_leaf_controls_enabled(self, enabled: bool) -> None:
         self._slot_combo.setEnabled(enabled)
         self._velocity.setEnabled(enabled)
@@ -163,7 +208,10 @@ class InspectorPanel(QWidget):
     def _set_structure_enabled(self, selection_exists: bool, leaf_selected: bool) -> None:
         for btn in self._split_buttons:
             btn.setEnabled(leaf_selected)
-        self._template_btn.setEnabled(selection_exists)
+        self._template_combo.setEnabled(leaf_selected)
+        self._template_btn.setEnabled(leaf_selected)
+        for _template_id, quick_button in self._template_quick_buttons:
+            quick_button.setEnabled(leaf_selected)
         self._clear_btn.setEnabled(selection_exists)
 
     def _show_mode_help(self, show_none: bool, show_internal: bool) -> None:
@@ -186,6 +234,7 @@ class InspectorPanel(QWidget):
             self._velocity_value.setText("1.00")
             self._pitch.setValue(0)
             self._rest_note.setText("")
+            self._template_desc.setText("Select a leaf to apply a template.")
             self._set_leaf_controls_enabled(False)
             self._set_structure_enabled(selection_exists=False, leaf_selected=False)
             self._show_mode_help(show_none=True, show_internal=False)
@@ -207,6 +256,7 @@ class InspectorPanel(QWidget):
             self._pitch.setValue(int(node.pitch_offset))
             self._rest_note.setText("This leaf is currently a rest." if node.sample_slot is None else "")
             self._internal_info.setText("Internal group details will appear here.")
+            self._update_template_description()
             self._set_leaf_controls_enabled(True)
             self._set_structure_enabled(selection_exists=True, leaf_selected=True)
             self._show_mode_help(show_none=False, show_internal=False)
@@ -220,6 +270,7 @@ class InspectorPanel(QWidget):
         self._velocity_value.setText("1.00")
         self._pitch.setValue(0)
         self._rest_note.setText("")
+        self._template_desc.setText("Templates can only be applied to leaf nodes.")
         child_count = len(node.children)
         self._internal_info.setText(
             "\n".join(

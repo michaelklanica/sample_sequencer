@@ -12,8 +12,10 @@ from audio.realtime import RealtimeLooper
 from audio.sample_library import MAX_SLOTS, SampleLibrary
 from engine.edit_policy import classify_edit, invalidation_reason
 from engine.pattern import create_blank_pattern
+from engine.power_tools import apply_subtree_template
 from engine.rhythm_tree import RhythmNode
 from sample_sequencer.gui.main_window import MainWindow
+from sample_sequencer.gui.template_defs import TEMPLATE_BY_ID
 from sequencer_io import LoadedPatternProject, load_pattern_project_from_json, save_pattern_project_to_json
 
 
@@ -62,7 +64,7 @@ class SequencerGuiApp:
         w.timeline_widget.splitRequested.connect(self._split_path)
         w.timeline_widget.clearRequested.connect(self._clear_path)
         w.timeline_widget.slotAssignRequested.connect(self._assign_slot_to_path)
-        w.timeline_widget.templateRequested.connect(self._template_stub)
+        w.timeline_widget.templateRequested.connect(self._apply_template_to_path)
 
         w.inspector_panel.slotChanged.connect(self._set_slot_for_selected)
         w.inspector_panel.velocityChanged.connect(self._set_velocity_for_selected)
@@ -196,10 +198,10 @@ class SequencerGuiApp:
             return
         self._split_path(self.selected_node_path, parts)
 
-    def _apply_template_to_selected(self) -> None:
+    def _apply_template_to_selected(self, template_id: str) -> None:
         if self.selected_node_path is None:
             return
-        self._template_stub(self.selected_node_path)
+        self._apply_template_to_path(self.selected_node_path, template_id)
 
     def _iter_leaf_nodes(self, node: RhythmNode) -> list[RhythmNode]:
         if node.is_leaf():
@@ -264,12 +266,48 @@ class SequencerGuiApp:
             return
         self._set_leaf_sample_slot(node=node, path=path, slot=slot, status_message=f"Assigned slot {slot} to selected leaf")
 
-    def _template_stub(self, path: str) -> None:
-        next_selection = self._first_leaf_under_path(path)
+    def _first_leaf_descendant(self, node: RhythmNode, path: str) -> tuple[str, RhythmNode] | None:
+        current_node = node
+        current_path = path
+        while not current_node.is_leaf():
+            if not current_node.children:
+                return None
+            current_node = current_node.children[0]
+            current_path = f"{current_path}.0"
+        return current_path, current_node
+
+    def _apply_template_to_path(self, path: str, template_id: str) -> None:
+        node = self._node_map().get(path)
+        if node is None or not node.is_leaf():
+            self._set_ui_status("Templates can only be applied to leaf nodes.")
+            return
+
+        playing_before = self.realtime_looper.is_playing
+        self._apply_edit_policy("apply_subtree_template")
+
+        try:
+            apply_subtree_template(node, template_id)
+        except ValueError as exc:
+            self._set_ui_status(str(exc))
+            QMessageBox.warning(self.window, "Template", str(exc))
+            return
+
+        self._is_dirty = True
+        label = TEMPLATE_BY_ID.get(template_id).label if template_id in TEMPLATE_BY_ID else template_id
+        next_selection = self._first_leaf_descendant(node, path)
         if next_selection is not None:
             self.selected_node_path, self.selected_node = next_selection
-            self.refresh_selection_views()
-        QMessageBox.information(self.window, "Template", f"Apply template is a stub in MVP. (path={path})")
+        else:
+            self.selected_node_path, self.selected_node = None, None
+
+        self.refresh_bar_views()
+        self.refresh_selection_views()
+
+        status_parts: list[str] = []
+        if playing_before:
+            status_parts.append("Stopped realtime playback because template changed loop structure.")
+        status_parts.append(f"Applied template '{label}'.")
+        self._set_ui_status(" ".join(status_parts))
 
     def _set_slot_for_selected(self, slot: int) -> None:
         resolved = None if slot < 0 else slot

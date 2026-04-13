@@ -53,7 +53,7 @@ def save_pattern_project_to_json(
 
     data: dict[str, Any] = {
         "name": pattern_name.strip() or "Untitled Pattern",
-        "bpm": float(bpm),
+        "bpm": float(pattern.bpm),
         "sample_folder": sample_folder.resolve().as_posix(),
         "sample_slots": _serialize_sample_slots(sample_library, sample_folder),
         "bars": [

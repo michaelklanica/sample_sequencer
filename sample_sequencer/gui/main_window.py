@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSignalBlocker, Signal
 from PySide6.QtWidgets import (
     QComboBox,
+    QDoubleSpinBox,
     QHBoxLayout,
+    QLabel,
     QMainWindow,
     QPushButton,
     QSplitter,
@@ -29,6 +31,7 @@ class MainWindow(QMainWindow):
     exportClicked = Signal()
     loadSamplesClicked = Signal()
     reloadSamplesClicked = Signal()
+    bpmChanged = Signal(float)
 
     def __init__(self) -> None:
         super().__init__()
@@ -50,6 +53,12 @@ class MainWindow(QMainWindow):
         self.export_btn = QPushButton("Export")
         self.load_samples_btn = QPushButton("Load Samples")
         self.reload_samples_btn = QPushButton("Reload Samples")
+        self.bpm_label = QLabel("BPM:")
+        self.bpm_spin = QDoubleSpinBox()
+        self.bpm_spin.setRange(20.0, 300.0)
+        self.bpm_spin.setSingleStep(1.0)
+        self.bpm_spin.setDecimals(1)
+        self.bpm_spin.setValue(120.0)
         for widget in [
             self.play_btn,
             self.stop_btn,
@@ -60,6 +69,8 @@ class MainWindow(QMainWindow):
             self.export_btn,
             self.load_samples_btn,
             self.reload_samples_btn,
+            self.bpm_label,
+            self.bpm_spin,
         ]:
             toolbar_layout.addWidget(widget)
         toolbar_layout.addStretch(1)
@@ -101,3 +112,9 @@ class MainWindow(QMainWindow):
         self.load_samples_btn.clicked.connect(self.loadSamplesClicked.emit)
         self.reload_samples_btn.clicked.connect(self.reloadSamplesClicked.emit)
         self.mode_combo.currentTextChanged.connect(self.modeChanged.emit)
+        self.bpm_spin.valueChanged.connect(self.bpmChanged.emit)
+
+    def set_bpm_value(self, bpm: float) -> None:
+        blocker = QSignalBlocker(self.bpm_spin)
+        self.bpm_spin.setValue(bpm)
+        del blocker

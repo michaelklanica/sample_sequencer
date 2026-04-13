@@ -41,7 +41,6 @@ def main() -> None:
         from audio.export import export_pattern
 
         project, library = _load_library_for_project(args.export)
-        setattr(project.pattern, "bpm", project.bpm)
         output = export_pattern(
             project.pattern,
             library,
@@ -57,7 +56,6 @@ def main() -> None:
         from audio.export import export_bars
 
         project, library = _load_library_for_project(args.export_bars)
-        setattr(project.pattern, "bpm", project.bpm)
         outputs = export_bars(
             project.pattern,
             library,

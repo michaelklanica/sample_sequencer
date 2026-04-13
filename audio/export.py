@@ -8,6 +8,7 @@ import soundfile as sf
 from audio.renderer import OfflineRenderer
 from audio.sample_library import SampleLibrary
 from engine.pattern import Pattern
+from engine.project import Project
 from engine.timeline import pattern_duration_seconds
 
 
@@ -15,8 +16,8 @@ EXPORT_MODES = ("truncate", "wrap", "tail")
 MAX_TAIL_SECONDS = 20.0
 
 
-def _resolve_bpm(pattern: Pattern) -> float:
-    return float(pattern.bpm)
+def _resolve_bpm(bpm: float) -> float:
+    return float(bpm)
 
 
 def _format_bpm_tag(bpm: float) -> str:
@@ -50,6 +51,7 @@ def export_pattern(
     sample_rate: int = 44100,
     normalize: bool = True,
     mode: str = "truncate",
+    bpm: float = 120.0,
 ) -> str:
     """
     Renders full pattern (respecting playback chain) and writes to WAV.
@@ -69,17 +71,17 @@ def export_pattern(
         raise ValueError(f"Unsupported export mode '{mode}'. Expected one of: {', '.join(EXPORT_MODES)}.")
 
     renderer = OfflineRenderer(headroom_gain=1.0)
-    bpm = _resolve_bpm(pattern)
-    cycle_duration = pattern_duration_seconds(pattern, bpm=bpm)
+    resolved_bpm = _resolve_bpm(bpm)
+    cycle_duration = pattern_duration_seconds(pattern, bpm=resolved_bpm)
 
     if normalized_mode == "truncate":
-        rendered = renderer.render_pattern(pattern, sample_library, bpm=bpm)
+        rendered = renderer.render_pattern(pattern, sample_library, bpm=resolved_bpm)
         audio = rendered.buffer
     elif normalized_mode == "wrap":
         rendered = renderer.render_pattern_with_length(
             pattern,
             sample_library,
-            bpm=bpm,
+            bpm=resolved_bpm,
             total_seconds=2.0 * cycle_duration,
             cycle_count=2,
         )
@@ -99,7 +101,7 @@ def export_pattern(
         rendered = renderer.render_pattern_with_length(
             pattern,
             sample_library,
-            bpm=bpm,
+            bpm=resolved_bpm,
             total_seconds=cycle_duration + max_tail,
             cycle_count=1,
         )
@@ -108,7 +110,7 @@ def export_pattern(
     audio = _normalize_audio(audio, enabled=normalize)
 
     prefix = _safe_prefix(filename_prefix)
-    file_path = output_dir / f"{prefix}_bpm{_format_bpm_tag(bpm)}_{normalized_mode}.wav"
+    file_path = output_dir / f"{prefix}_bpm{_format_bpm_tag(resolved_bpm)}_{normalized_mode}.wav"
     sf.write(file_path, audio, samplerate=rendered.sample_rate)
     return str(file_path)
 
@@ -135,7 +137,7 @@ def export_bars(
         )
 
     renderer = OfflineRenderer(headroom_gain=1.0)
-    bpm = _resolve_bpm(pattern)
+    bpm = _resolve_bpm(120.0)
     prefix = _safe_prefix(filename_prefix)
 
     exported_files: list[str] = []
@@ -148,3 +150,32 @@ def export_bars(
         exported_files.append(str(file_path))
 
     return exported_files
+
+
+def export_arrangement(
+    project: Project,
+    sample_library: SampleLibrary,
+    output_path: str,
+    filename_prefix: str,
+    sample_rate: int = 44100,
+    normalize: bool = True,
+    mode: str = "truncate",
+    bpm: float = 120.0,
+) -> str:
+    arranged_bars = []
+    for pattern_index in project.arrangement:
+        if 0 <= pattern_index < len(project.patterns):
+            arranged_bars.extend([bar.clone() for bar in project.patterns[pattern_index].bars])
+    if not arranged_bars:
+        arranged_bars = [bar.clone() for bar in project.current_pattern.bars]
+    arrangement_pattern = Pattern(name="Arrangement", bars=arranged_bars)
+    return export_pattern(
+        arrangement_pattern,
+        sample_library,
+        output_path=output_path,
+        filename_prefix=filename_prefix,
+        sample_rate=sample_rate,
+        normalize=normalize,
+        mode=mode,
+        bpm=bpm,
+    )

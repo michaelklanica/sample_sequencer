@@ -4,14 +4,14 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
-from audio.export import export_pattern
+from audio.export import export_arrangement, export_pattern
 from audio.playback import play_once
 from audio.realtime import RealtimeLooper
 from audio.sample_library import MAX_SLOTS, SampleLibrary
 from engine.edit_policy import classify_edit, invalidation_reason
-from engine.pattern import create_blank_pattern
+from engine.project import Project
 from engine.power_tools import apply_subtree_template
 from engine.rhythm_tree import RhythmNode
 from sample_sequencer.gui.export_dialog import ExportDialog
@@ -20,12 +20,12 @@ from sample_sequencer.gui.template_defs import TEMPLATE_BY_ID
 from sample_sequencer.gui.undo_manager import UndoManager
 from sequencer_io import (
     LoadedPatternProject,
-    deserialize_pattern,
+    deserialize_project,
     deserialize_sample_slot_files,
     deserialize_slot_choke_groups,
     load_pattern_project_from_json,
     save_pattern_project_to_json,
-    serialize_pattern,
+    serialize_project,
     serialize_sample_slot_files,
     serialize_slot_choke_groups,
 )
@@ -35,13 +35,11 @@ class SequencerGuiApp:
     def __init__(self, project: LoadedPatternProject | None = None) -> None:
         self.sample_library = SampleLibrary()
         if project is None:
-            self.pattern = create_blank_pattern("Untitled", bpm=120.0, numerator=4, denominator=4)
-            self.pattern_name = "Untitled"
+            self.project = Project.create_default()
             self.sample_folder = Path("assets/samples").resolve()
             self.project_path: Path | None = None
         else:
-            self.pattern = project.pattern
-            self.pattern_name = project.name
+            self.project = project.project
             self.sample_folder = project.sample_folder
             self.project_path = project.source_path
             for slot, wav_path in project.sample_slot_files.items():
@@ -59,7 +57,7 @@ class SequencerGuiApp:
         self._is_dirty = False
         self.undo_manager = UndoManager(max_history=100)
 
-        self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.pattern.bpm)
+        self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.project.bpm)
 
         self.window = MainWindow()
         self._wire_events()
@@ -72,6 +70,14 @@ class SequencerGuiApp:
 
     def _wire_events(self) -> None:
         w = self.window
+        w.pattern_panel.patternSelected.connect(self._set_current_pattern)
+        w.pattern_panel.createClicked.connect(self._create_pattern)
+        w.pattern_panel.renameClicked.connect(self._rename_pattern)
+        w.pattern_panel.deleteClicked.connect(self._delete_pattern)
+        w.arrangement_panel.addClicked.connect(self._arrangement_add_step)
+        w.arrangement_panel.removeClicked.connect(self._arrangement_remove_step)
+        w.arrangement_panel.moveUpClicked.connect(self._arrangement_move_up)
+        w.arrangement_panel.moveDownClicked.connect(self._arrangement_move_down)
         w.bar_list_panel.barSelected.connect(self.set_current_bar)
         w.tree_panel.nodeSelected.connect(self._on_widget_selected_node)
         w.timeline_widget.blockSelected.connect(self._on_widget_selected_node)
@@ -113,7 +119,7 @@ class SequencerGuiApp:
         return nodes
 
     def _node_map(self) -> dict[str, RhythmNode]:
-        return dict(self._iter_nodes(self.pattern.bars[self.current_bar_index].root, "0"))
+        return dict(self._iter_nodes(self.project.current_pattern.bars[self.current_bar_index].root, "0"))
 
     def _path_for_node(self, target: RhythmNode | None) -> str | None:
         if target is None:
@@ -136,7 +142,7 @@ class SequencerGuiApp:
         return None, None
 
     def set_current_bar(self, bar_index: int) -> None:
-        if bar_index < 0 or bar_index >= len(self.pattern.bars):
+        if bar_index < 0 or bar_index >= len(self.project.current_pattern.bars):
             return
         if self.current_bar_index == bar_index:
             return
@@ -163,7 +169,7 @@ class SequencerGuiApp:
             self.refresh_selection_views()
 
     def refresh_bar_views(self) -> None:
-        bar = self.pattern.bars[self.current_bar_index]
+        bar = self.project.current_pattern.bars[self.current_bar_index]
         self.window.bar_list_panel.set_selected_bar(self.current_bar_index)
         self.window.tree_panel.set_bar(bar, self.selected_node_path)
         self.window.timeline_widget.set_bar(bar)
@@ -203,13 +209,16 @@ class SequencerGuiApp:
         self._refresh_transport()
 
     def refresh_ui(self) -> None:
-        self.window.bar_list_panel.set_pattern(self.pattern, self.current_bar_index)
+        names = [pattern.name for pattern in self.project.patterns]
+        self.window.pattern_panel.set_patterns(names, self.project.current_pattern_index)
+        self.window.arrangement_panel.set_arrangement(self.project.arrangement, names)
+        self.window.bar_list_panel.set_pattern(self.project.current_pattern, self.current_bar_index)
         self.window.timeline_widget.set_sample_library(self.sample_library)
         self.window.slot_panel.set_library(self.sample_library)
         self.window.inspector_panel.set_sample_library(self.sample_library)
         self.window.set_export_mode(self.export_mode)
-        self.window.set_bpm_value(self.pattern.bpm)
-        self.window.inspector_panel.set_bpm_value(self.pattern.bpm)
+        self.window.set_bpm_value(self.project.bpm)
+        self.window.inspector_panel.set_bpm_value(self.project.bpm)
         self._update_undo_redo_state()
         self.refresh_bar_views()
         self.refresh_selection_views()
@@ -219,11 +228,10 @@ class SequencerGuiApp:
 
     def _capture_project_snapshot(self) -> dict[str, object]:
         return {
-            "pattern_name": self.pattern_name,
             "sample_folder": str(self.sample_folder.resolve()),
             "project_path": str(self.project_path.resolve()) if self.project_path else None,
             "export_mode": self.export_mode,
-            "pattern": serialize_pattern(self.pattern),
+            "project": serialize_project(self.project),
             "sample_slots": serialize_sample_slot_files(self.sample_library),
             "slot_choke_groups": serialize_slot_choke_groups(self.sample_library),
         }
@@ -233,12 +241,11 @@ class SequencerGuiApp:
         self._update_undo_redo_state()
 
     def _restore_project_snapshot(self, snapshot: dict[str, object]) -> None:
-        self.pattern_name = str(snapshot["pattern_name"])
         self.sample_folder = Path(str(snapshot["sample_folder"])).expanduser().resolve()
         project_path = snapshot.get("project_path")
         self.project_path = Path(str(project_path)).expanduser().resolve() if project_path else None
         self.export_mode = str(snapshot.get("export_mode", "truncate"))
-        self.pattern = deserialize_pattern(dict(snapshot["pattern"]))
+        self.project = deserialize_project(dict(snapshot["project"]))
         sample_slot_files = deserialize_sample_slot_files(dict(snapshot.get("sample_slots", {})))
         slot_choke_groups = deserialize_slot_choke_groups(dict(snapshot.get("slot_choke_groups", {})))
 
@@ -248,9 +255,9 @@ class SequencerGuiApp:
                 self.sample_library.load_wav_into_slot(slot, wav_path)
         for slot, choke_group in slot_choke_groups.items():
             self.sample_library.set_choke_group(slot, choke_group)
-        self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.pattern.bpm)
+        self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.project.bpm)
 
-        self.current_bar_index = min(self.current_bar_index, len(self.pattern.bars) - 1)
+        self.current_bar_index = min(self.current_bar_index, len(self.project.current_pattern.bars) - 1)
         self.selected_node = None
         self.selected_node_path = None
         self.refresh_ui()
@@ -286,10 +293,10 @@ class SequencerGuiApp:
 
     def set_bpm(self, bpm: float) -> None:
         requested_bpm = float(bpm)
-        normalized_bpm = self.pattern.clamp_bpm(requested_bpm)
-        if abs(self.pattern.bpm - normalized_bpm) < 1e-9:
-            self.window.set_bpm_value(self.pattern.bpm)
-            self.window.inspector_panel.set_bpm_value(self.pattern.bpm)
+        normalized_bpm = self.project.current_pattern.clamp_bpm(requested_bpm)
+        if abs(self.project.bpm - normalized_bpm) < 1e-9:
+            self.window.set_bpm_value(self.project.bpm)
+            self.window.inspector_panel.set_bpm_value(self.project.bpm)
             return
 
         status_parts: list[str] = []
@@ -298,12 +305,12 @@ class SequencerGuiApp:
             status_parts.append("Playback stopped due to BPM change.")
 
         self.begin_mutating_action(f"Set BPM to {normalized_bpm:.1f}")
-        self.pattern.set_bpm(normalized_bpm)
-        self.realtime_looper.update_bpm(self.pattern.bpm)
+        self.project.bpm = normalized_bpm
+        self.realtime_looper.update_bpm(self.project.bpm)
         self._is_dirty = True
-        self.window.set_bpm_value(self.pattern.bpm)
-        self.window.inspector_panel.set_bpm_value(self.pattern.bpm)
-        status_parts.append(f"BPM set to {self.pattern.bpm:.1f}.")
+        self.window.set_bpm_value(self.project.bpm)
+        self.window.inspector_panel.set_bpm_value(self.project.bpm)
+        status_parts.append(f"BPM set to {self.project.bpm:.1f}.")
         self._set_ui_status(" ".join(status_parts))
 
     def _on_widget_selected_node(self, path: str, node: RhythmNode | None) -> None:
@@ -563,11 +570,11 @@ class SequencerGuiApp:
             return False
         try:
             if self.transport_mode == "bar":
-                self.realtime_looper.set_bar_loop(self.pattern.bars[self.current_bar_index], bpm=self.pattern.bpm)
+                self.realtime_looper.set_bar_loop(self.project.current_pattern.bars[self.current_bar_index], bpm=self.project.bpm)
             elif self.transport_mode == "pattern":
-                self.realtime_looper.set_pattern_loop(self.pattern, bpm=self.pattern.bpm)
+                self.realtime_looper.set_pattern_loop(self.project.current_pattern, bpm=self.project.bpm)
             else:
-                self.realtime_looper.set_chain_loop(self.pattern, bpm=self.pattern.bpm)
+                self.realtime_looper.set_chain_loop(self.project, bpm=self.project.bpm)
         except Exception as exc:
             self._set_ui_status(str(exc))
             QMessageBox.warning(self.window, "Playback", str(exc))
@@ -590,8 +597,7 @@ class SequencerGuiApp:
     def _new_project(self) -> None:
         self.begin_mutating_action("New project")
         self._apply_edit_policy("new_pattern")
-        self.pattern = create_blank_pattern("Untitled", bpm=120.0, numerator=4, denominator=4)
-        self.pattern_name = "Untitled"
+        self.project = Project.create_default()
         self.current_bar_index = 0
         self.selected_node = None
         self.selected_node_path = None
@@ -651,7 +657,7 @@ class SequencerGuiApp:
         self.begin_mutating_action("Load samples from folder")
         self.sample_folder = folder
         self.sample_library = fresh_library
-        self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.pattern.bpm)
+        self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.project.bpm)
         self.refresh_ui()
 
         parts = [f"Loaded {loaded} sample{'s' if loaded != 1 else ''} from {folder}"]
@@ -670,9 +676,7 @@ class SequencerGuiApp:
             return
         save_pattern_project_to_json(
             self.project_path,
-            pattern_name=self.pattern_name,
-            bpm=self.pattern.bpm,
-            pattern=self.pattern,
+            project=self.project,
             sample_folder=self.sample_folder,
             sample_library=self.sample_library,
         )
@@ -685,8 +689,7 @@ class SequencerGuiApp:
             return
         project = load_pattern_project_from_json(Path(selected))
         self._apply_edit_policy("load_pattern")
-        self.pattern = project.pattern
-        self.pattern_name = project.name
+        self.project = project.project
         self.sample_folder = project.sample_folder
         self.project_path = project.source_path
         self.sample_library = SampleLibrary()
@@ -695,7 +698,7 @@ class SequencerGuiApp:
                 self.sample_library.load_wav_into_slot(slot, wav_path)
         for slot, choke_group in project.slot_choke_groups.items():
             self.sample_library.set_choke_group(slot, choke_group)
-        self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.pattern.bpm)
+        self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.project.bpm)
         self.current_bar_index = 0
         self.selected_node = None
         self.selected_node_path = None
@@ -713,16 +716,104 @@ class SequencerGuiApp:
         selected_mode = dialog.selected_mode()
         self.export_mode = selected_mode
         self.window.set_export_mode(selected_mode)
-        output = export_pattern(
-            self.pattern,
-            self.sample_library,
-            output_path="exports",
-            filename_prefix=self.pattern_name,
-            sample_rate=int(round(self.sample_library.sample_rate or 44100)),
-            normalize=True,
-            mode=selected_mode,
-        )
+        if self.transport_mode == "chain":
+            output = export_arrangement(
+                self.project,
+                self.sample_library,
+                output_path="exports",
+                filename_prefix="arrangement",
+                sample_rate=int(round(self.sample_library.sample_rate or 44100)),
+                normalize=True,
+                mode=selected_mode,
+                bpm=self.project.bpm,
+            )
+        else:
+            output = export_pattern(
+                self.project.current_pattern,
+                self.sample_library,
+                output_path="exports",
+                filename_prefix=self.project.current_pattern.name,
+                sample_rate=int(round(self.sample_library.sample_rate or 44100)),
+                normalize=True,
+                mode=selected_mode,
+                bpm=self.project.bpm,
+            )
         QMessageBox.information(self.window, "Export", f"Exported to {output}\nMode: {selected_mode}")
+
+    def _set_current_pattern(self, index: int) -> None:
+        if index < 0 or index >= len(self.project.patterns) or self.project.current_pattern_index == index:
+            return
+        self.begin_mutating_action("Switch pattern")
+        self.project.current_pattern_index = index
+        self.current_bar_index = 0
+        self.clear_selection(refresh=False)
+        self._is_dirty = True
+        self.refresh_ui()
+
+    def _create_pattern(self) -> None:
+        self.begin_mutating_action("Create pattern")
+        new_index = self.project.add_pattern_duplicate_current()
+        self.project.current_pattern_index = new_index
+        self.current_bar_index = 0
+        self.clear_selection(refresh=False)
+        self._is_dirty = True
+        self.refresh_ui()
+
+    def _rename_pattern(self, index: int) -> None:
+        if index < 0 or index >= len(self.project.patterns):
+            return
+        value, ok = QInputDialog.getText(self.window, "Rename Pattern", "Pattern name:", text=self.project.patterns[index].name)
+        if not ok or not value.strip():
+            return
+        self.begin_mutating_action("Rename pattern")
+        self.project.patterns[index].name = Path(value).name
+        self._is_dirty = True
+        self.refresh_ui()
+
+    def _delete_pattern(self, index: int) -> None:
+        if len(self.project.patterns) <= 1 or index < 0 or index >= len(self.project.patterns):
+            return
+        self.begin_mutating_action("Delete pattern")
+        del self.project.patterns[index]
+        self.project.arrangement = [i for i in self.project.arrangement if i != index]
+        self.project.arrangement = [i - 1 if i > index else i for i in self.project.arrangement]
+        if not self.project.arrangement:
+            self.project.arrangement = [0]
+        self.project.current_pattern_index = min(self.project.current_pattern_index, len(self.project.patterns) - 1)
+        self.current_bar_index = 0
+        self.clear_selection(refresh=False)
+        self._is_dirty = True
+        self.refresh_ui()
+
+    def _arrangement_add_step(self) -> None:
+        self.begin_mutating_action("Arrangement add step")
+        self.project.arrangement.append(self.project.current_pattern_index)
+        self._is_dirty = True
+        self.refresh_ui()
+
+    def _arrangement_remove_step(self, index: int) -> None:
+        if len(self.project.arrangement) <= 1 or index < 0 or index >= len(self.project.arrangement):
+            return
+        self.begin_mutating_action("Arrangement remove step")
+        del self.project.arrangement[index]
+        self._is_dirty = True
+        self.refresh_ui()
+
+    def _arrangement_move_up(self, index: int) -> None:
+        if index <= 0 or index >= len(self.project.arrangement):
+            return
+        self.begin_mutating_action("Arrangement move up")
+        self.project.arrangement[index - 1], self.project.arrangement[index] = self.project.arrangement[index], self.project.arrangement[index - 1]
+        self._is_dirty = True
+        self.refresh_ui()
+
+    def _arrangement_move_down(self, index: int) -> None:
+        if index < 0 or index >= len(self.project.arrangement) - 1:
+            return
+        self.begin_mutating_action("Arrangement move down")
+        self.project.arrangement[index], self.project.arrangement[index + 1] = self.project.arrangement[index + 1], self.project.arrangement[index]
+        self._is_dirty = True
+        self.refresh_ui()
 
     def _apply_edit_policy(self, action_name: str) -> bool:
         classification = classify_edit(action_name)

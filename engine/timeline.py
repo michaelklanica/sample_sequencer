@@ -26,7 +26,7 @@ def build_timeline_events(pattern: Pattern, bpm: float) -> list[TimelineEvent]:
         events_by_bar[event.bar_index].append(event)
 
     timeline_events: list[TimelineEvent] = []
-    chain_indices = pattern.resolved_playback_order()
+    chain_indices = list(range(len(pattern.bars)))
     current_offset_seconds = 0.0
 
     for chain_position, bar_index in enumerate(chain_indices):
@@ -54,5 +54,5 @@ def build_timeline_events(pattern: Pattern, bpm: float) -> list[TimelineEvent]:
 def pattern_duration_seconds(pattern: Pattern, bpm: float) -> float:
     return sum(
         bar_duration_seconds(pattern.bars[bar_index].time_signature, bpm)
-        for bar_index in pattern.resolved_playback_order()
+        for bar_index in range(len(pattern.bars))
     )

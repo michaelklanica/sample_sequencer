@@ -21,9 +21,8 @@ class Bar:
 
 @dataclass
 class Pattern:
+    name: str
     bars: list[Bar]
-    bpm: float = 120.0
-    playback_order: list[int] | None = None
 
     def __post_init__(self) -> None:
         self.validate()
@@ -31,47 +30,12 @@ class Pattern:
     def validate(self) -> None:
         if len(self.bars) == 0:
             raise ValueError("Pattern must contain at least one bar.")
-        self.bpm = self.clamp_bpm(self.bpm)
-
-        if self.playback_order is not None:
-            self.validate_playback_order(self.playback_order, len(self.bars))
+        if not self.name.strip():
+            raise ValueError("Pattern name cannot be empty.")
 
     @staticmethod
     def clamp_bpm(bpm: float) -> float:
         return max(20.0, min(300.0, float(bpm)))
-
-    def set_bpm(self, bpm: float) -> None:
-        self.bpm = self.clamp_bpm(bpm)
-
-    @staticmethod
-    def validate_playback_order(order: list[int], bar_count: int) -> None:
-        if len(order) == 0:
-            raise ValueError("playback_order cannot be empty when provided.")
-        for index in order:
-            if index < 0 or index >= bar_count:
-                raise ValueError(f"playback_order index out of range: {index}")
-
-    def set_playback_order(self, order: list[int] | None) -> None:
-        if order is None:
-            self.playback_order = None
-            return
-        self.validate_playback_order(order, len(self.bars))
-        self.playback_order = list(order)
-
-    def remap_playback_order_for_insert(self, insert_index: int) -> None:
-        if self.playback_order is None:
-            return
-        self.playback_order = [idx + 1 if idx >= insert_index else idx for idx in self.playback_order]
-
-    def remap_playback_order_for_delete(self, deleted_index: int) -> None:
-        if self.playback_order is None:
-            return
-        remapped: list[int] = []
-        for idx in self.playback_order:
-            if idx == deleted_index:
-                continue
-            remapped.append(idx - 1 if idx > deleted_index else idx)
-        self.playback_order = remapped if remapped else None
 
     def flatten_events(self) -> list[SequencerEvent]:
         events: list[SequencerEvent] = []
@@ -80,14 +44,17 @@ class Pattern:
         events.sort(key=lambda ev: (ev.bar_index, ev.start_fraction))
         return events
 
-    def resolved_playback_order(self) -> list[int]:
-        if self.playback_order is None:
-            return list(range(len(self.bars)))
-        return list(self.playback_order)
+    @property
+    def time_signature(self) -> tuple[int, int]:
+        ts = self.bars[0].time_signature
+        return (ts.numerator, ts.denominator)
+
+    def clone(self) -> "Pattern":
+        return Pattern(name=self.name, bars=[bar.clone() for bar in self.bars])
 
     @classmethod
     def one_bar(cls, time_signature: TimeSignature) -> "Pattern":
-        return cls(bars=[Bar(time_signature=time_signature)], bpm=120.0)
+        return cls(name="Pattern", bars=[Bar(time_signature=time_signature)])
 
 
 def create_blank_bar(time_signature: TimeSignature) -> Bar:
@@ -99,7 +66,7 @@ def create_blank_pattern(name: str, bpm: float, numerator: int, denominator: int
     """Create a new single-bar blank pattern for authoring workflows."""
     if not name.strip():
         raise ValueError("Pattern name cannot be empty.")
-    normalized_bpm = Pattern.clamp_bpm(bpm)
+    _ = Pattern.clamp_bpm(bpm)
 
     time_signature = TimeSignature(numerator=numerator, denominator=denominator)
-    return Pattern(bars=[create_blank_bar(time_signature=time_signature)], bpm=normalized_bpm)
+    return Pattern(name=name.strip(), bars=[create_blank_bar(time_signature=time_signature)])

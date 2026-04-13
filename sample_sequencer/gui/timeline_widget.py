@@ -44,6 +44,7 @@ class TimelineWidget(QWidget):
         self._leaf_hits: list[LeafHit] = []
         self.setMinimumHeight(120)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def set_bar(self, bar: Bar | None) -> None:
         self._bar = bar
@@ -297,6 +298,8 @@ class TimelineWidget(QWidget):
             self.update()
 
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
         hit = self._hit_test(event.position())
         if event.button() == Qt.MouseButton.LeftButton:
             if hit is not None:
@@ -305,11 +308,39 @@ class TimelineWidget(QWidget):
                 self.blockSelected.emit("", None)
         if event.button() == Qt.MouseButton.RightButton and hit is not None:
             self._open_context_menu(event.globalPosition().toPoint(), hit)
+        super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:  # type: ignore[override]
         hit = self._hit_test(event.position())
-        if event.button() == Qt.MouseButton.LeftButton and hit is not None:
-            self.splitRequested.emit(hit.path, 2)
+        if event.button() == Qt.MouseButton.LeftButton and hit is not None and hit.node.is_leaf():
+            parts = 3 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 2
+            self.splitRequested.emit(hit.path, parts)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        if event.isAutoRepeat():
+            super().keyPressEvent(event)
+            return
+        key_to_parts = {
+            Qt.Key.Key_2: 2,
+            Qt.Key.Key_3: 3,
+            Qt.Key.Key_4: 4,
+            Qt.Key.Key_5: 5,
+            Qt.Key.Key_6: 6,
+        }
+        parts = key_to_parts.get(event.key())
+        if parts is not None and self._selected_path is not None:
+            node_map: dict[str, RhythmNode] = {}
+            if self._bar is not None:
+                node_map = dict(self._iter_leaves(self._bar.root, "0"))
+            selected_node = node_map.get(self._selected_path)
+            if selected_node is not None and selected_node.is_leaf():
+                self.splitRequested.emit(self._selected_path, parts)
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def _selected_info_label(self, node: RhythmNode) -> str:
         if not node.is_leaf():

@@ -3,45 +3,19 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from engine.pattern import Bar, Pattern
-from engine.rhythm_tree import RhythmNode
-from engine.time_signature import TimeSignature
-from sequencer_io.json_errors import PatternJsonError, PatternValidationError
-from sequencer_io.json_schema import validate_pattern_json
+from engine.project import Project
+from sequencer_io.json_errors import PatternJsonError
+from sequencer_io.snapshot import deserialize_project
 
 
 @dataclass(frozen=True)
 class LoadedPatternProject:
     source_path: Path
-    name: str
-    bpm: float
     sample_folder: Path
     sample_slot_files: dict[int, Path]
     slot_choke_groups: dict[int, int]
-    pattern: Pattern
-
-
-def _slot_to_int(raw_slot: Any) -> int:
-    return int(raw_slot) if isinstance(raw_slot, str) else raw_slot
-
-
-def _build_tree(node_data: dict[str, Any], parent: RhythmNode) -> None:
-    if "split" in node_data:
-        split = int(node_data["split"])
-        children = parent.split_equal(split)
-        for idx, child_data in enumerate(node_data["children"]):
-            _build_tree(child_data, children[idx])
-        return
-
-    velocity_raw = node_data.get("velocity", 1.0)
-    velocity = float(velocity_raw)
-    pitch_offset = int(node_data.get("pitch_offset", 0))
-    sample_slot = node_data.get("sample_slot")
-    if sample_slot is not None:
-        sample_slot = _slot_to_int(sample_slot)
-    parent.assign(sample_slot=sample_slot, velocity=velocity, pitch_offset=pitch_offset)
+    project: Project
 
 
 def load_pattern_project_from_json(json_path: Path | str) -> LoadedPatternProject:
@@ -50,56 +24,23 @@ def load_pattern_project_from_json(json_path: Path | str) -> LoadedPatternProjec
         raise PatternJsonError(f"JSON file not found: {source_path}")
 
     try:
-        raw_text = source_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise PatternJsonError(f"Failed to read JSON file: {source_path}") from exc
-
-    try:
-        data = json.loads(raw_text)
+        data = json.loads(source_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise PatternJsonError(
-            f"Malformed JSON in {source_path} (line {exc.lineno}, column {exc.colno}): {exc.msg}"
-        ) from exc
+        raise PatternJsonError(f"Malformed JSON in {source_path}: {exc}") from exc
 
-    validate_pattern_json(data)
+    project_payload = data.get("project")
+    if project_payload is None:
+        raise PatternJsonError("Missing 'project' payload")
+    project = deserialize_project(project_payload)
 
-    bars: list[Bar] = []
-    for bar_data in data["bars"]:
-        ts_data = bar_data["time_signature"]
-        time_signature = TimeSignature(ts_data["numerator"], ts_data["denominator"])
-        bar = Bar(time_signature=time_signature)
-        _build_tree(bar_data["tree"], bar.root)
-        bars.append(bar)
+    sample_folder = Path(data.get("sample_folder", "assets/samples")).expanduser().resolve()
+    sample_slot_files = {int(k): Path(v).expanduser().resolve() for k, v in data.get("sample_slots", {}).items()}
+    slot_choke_groups = {int(k): int(v) for k, v in data.get("slot_choke_groups", {}).items()}
 
-    sample_folder_raw = Path(data["sample_folder"])
-    if sample_folder_raw.is_absolute():
-        sample_folder = sample_folder_raw
-    else:
-        sample_folder = (source_path.parent / sample_folder_raw).resolve()
-
-    sample_slot_files: dict[int, Path] = {}
-    for raw_slot, filename in data["sample_slots"].items():
-        slot = _slot_to_int(raw_slot)
-        file_path = Path(filename)
-        if file_path.is_absolute():
-            resolved = file_path
-        else:
-            resolved = (sample_folder / file_path).resolve()
-        sample_slot_files[slot] = resolved
-
-    slot_choke_groups_raw = data.get("slot_choke_groups", {})
-    if isinstance(slot_choke_groups_raw, dict):
-        slot_choke_groups = {int(raw_slot): int(group) for raw_slot, group in slot_choke_groups_raw.items()}
-    else:
-        slot_choke_groups = {}
-
-    pattern = Pattern(bars=bars, bpm=float(data["bpm"]), playback_order=data.get("playback_order"))
     return LoadedPatternProject(
         source_path=source_path,
-        name=data["name"],
-        bpm=pattern.bpm,
         sample_folder=sample_folder,
         sample_slot_files=sample_slot_files,
         slot_choke_groups=slot_choke_groups,
-        pattern=pattern,
+        project=project,
     )

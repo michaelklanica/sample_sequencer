@@ -14,8 +14,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from sample_sequencer.gui.arrangement_panel import ArrangementPanel
 from sample_sequencer.gui.bar_list_panel import BarListPanel
 from sample_sequencer.gui.inspector_panel import InspectorPanel
+from sample_sequencer.gui.pattern_panel import PatternPanel
 from sample_sequencer.gui.slot_panel import SlotPanel
 from sample_sequencer.gui.timeline_widget import TimelineWidget
 from sample_sequencer.gui.transport_panel import TransportPanel
@@ -90,6 +92,8 @@ class MainWindow(QMainWindow):
             toolbar_layout.addWidget(widget)
         toolbar_layout.addStretch(1)
 
+        self.pattern_panel = PatternPanel()
+        self.arrangement_panel = ArrangementPanel()
         self.bar_list_panel = BarListPanel()
         self.tree_panel = TreePanel()
         self.timeline_widget = TimelineWidget()
@@ -99,6 +103,8 @@ class MainWindow(QMainWindow):
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
+        left_layout.addWidget(self.pattern_panel)
+        left_layout.addWidget(self.arrangement_panel)
         left_layout.addWidget(self.bar_list_panel)
         left_layout.addWidget(self.tree_panel)
 

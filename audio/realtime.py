@@ -9,6 +9,7 @@ import sounddevice as sd
 
 from audio.sample_library import SampleLibrary
 from engine.pattern import Bar, Pattern
+from engine.project import Project
 from engine.rhythm_tree import RhythmNode
 from engine.timing import bar_duration_seconds
 
@@ -175,28 +176,32 @@ class RealtimeLooper:
             self._reset_playback_state_locked()
             self._status_message = "Pattern loop prepared."
 
-    def set_chain_loop(self, pattern: Pattern, bpm: float | None = None) -> None:
+    def set_chain_loop(self, project: Project, bpm: float | None = None) -> None:
         with self._lock:
-            order = pattern.playback_order
-            if order is None:
-                raise ValueError("Cannot start chain loop: no playback order defined.")
-            if len(order) == 0:
-                raise ValueError("Cannot start chain loop: no playback order defined.")
-            try:
-                Pattern.validate_playback_order(order, len(pattern.bars))
-            except ValueError as exc:
-                raise ValueError("Cannot start chain loop: invalid playback order.") from exc
+            if len(project.arrangement) == 0:
+                raise ValueError("Cannot start chain loop: arrangement is empty.")
 
             bpm_value = self._bpm if bpm is None else float(bpm)
-            bars = [pattern.bars[index] for index in order]
+            bars: list[Bar] = []
+            source_indices: list[int] = []
+            for pattern_index in project.arrangement:
+                if pattern_index < 0 or pattern_index >= len(project.patterns):
+                    continue
+                pattern = project.patterns[pattern_index]
+                for bar_index, bar in enumerate(pattern.bars):
+                    bars.append(bar)
+                    source_indices.append(bar_index)
+            if not bars:
+                raise ValueError("Cannot start chain loop: arrangement has no valid patterns.")
+
             self._transport, self._segments = self._prepare_sequence_transport_locked(
                 mode="chain",
                 bars=bars,
-                source_indices=order,
+                source_indices=source_indices,
                 bpm=bpm_value,
             )
             self._reset_playback_state_locked()
-            self._status_message = "Chain loop prepared."
+            self._status_message = "Arrangement loop prepared."
 
     def start(self) -> None:
         sample_rate = self._sample_library.sample_rate

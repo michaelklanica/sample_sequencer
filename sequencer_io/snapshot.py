@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from engine.pattern import Bar, Pattern
+from engine.project import Project
 from engine.rhythm_tree import RhythmNode
 from engine.time_signature import TimeSignature
 
@@ -41,8 +42,8 @@ def _deserialize_tree(node_data: dict[str, Any], parent: RhythmNode) -> None:
 
 
 def serialize_pattern(pattern: Pattern) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "bpm": float(pattern.bpm),
+    return {
+        "name": pattern.name,
         "bars": [
             {
                 "time_signature": {
@@ -54,9 +55,6 @@ def serialize_pattern(pattern: Pattern) -> dict[str, Any]:
             for bar in pattern.bars
         ],
     }
-    if pattern.playback_order is not None:
-        payload["playback_order"] = list(pattern.playback_order)
-    return payload
 
 
 def deserialize_pattern(payload: dict[str, Any]) -> Pattern:
@@ -66,7 +64,26 @@ def deserialize_pattern(payload: dict[str, Any]) -> Pattern:
         bar = Bar(time_signature=TimeSignature(ts_data["numerator"], ts_data["denominator"]))
         _deserialize_tree(bar_data["tree"], bar.root)
         bars.append(bar)
-    return Pattern(bars=bars, bpm=float(payload["bpm"]), playback_order=payload.get("playback_order"))
+    return Pattern(name=str(payload.get("name", "Pattern")), bars=bars)
+
+
+def serialize_project(project: Project) -> dict[str, Any]:
+    return {
+        "patterns": [serialize_pattern(pattern) for pattern in project.patterns],
+        "current_pattern_index": int(project.current_pattern_index),
+        "arrangement": list(project.arrangement),
+        "bpm": float(project.bpm),
+    }
+
+
+def deserialize_project(payload: dict[str, Any]) -> Project:
+    patterns = [deserialize_pattern(pattern_payload) for pattern_payload in payload["patterns"]]
+    return Project(
+        patterns=patterns,
+        current_pattern_index=int(payload.get("current_pattern_index", 0)),
+        arrangement=[int(i) for i in payload.get("arrangement", [0])],
+        bpm=float(payload.get("bpm", 120.0)),
+    )
 
 
 def serialize_sample_slot_files(sample_library: Any) -> dict[str, str]:

@@ -156,6 +156,19 @@ class SequencerGuiApp:
             return None
         return self.selected_node_path, self.selected_node
 
+    def _first_leaf_under_path(self, path: str) -> tuple[str, RhythmNode] | None:
+        node = self._node_map().get(path)
+        if node is None:
+            return None
+        current_path = path
+        current_node = node
+        while not current_node.is_leaf():
+            if not current_node.children:
+                return None
+            current_node = current_node.children[0]
+            current_path = f"{current_path}.0"
+        return current_path, current_node
+
     def refresh_selection_views(self) -> None:
         self.window.tree_panel.set_selected_path(self.selected_node_path)
         self.window.timeline_widget.set_selected_node(self.selected_node, self.selected_node_path)
@@ -199,7 +212,8 @@ class SequencerGuiApp:
     def _reset_selected_subtree(self) -> None:
         if self.selected_node_path is None:
             return
-        node = self._node_map().get(self.selected_node_path)
+        subtree_path = self.selected_node_path
+        node = self._node_map().get(subtree_path)
         if node is None:
             return
         leaves = self._iter_leaf_nodes(node)
@@ -212,6 +226,11 @@ class SequencerGuiApp:
             return
         self._apply_edit_policy("clear_selected")
         self._is_dirty = True
+        next_selection = self._first_leaf_under_path(subtree_path)
+        if next_selection is not None:
+            self.selected_node_path, self.selected_node = next_selection
+        else:
+            self.selected_node_path, self.selected_node = None, None
         self.refresh_bar_views()
         self.refresh_selection_views()
         self._set_ui_status("Reset selected subtree to rest events")
@@ -223,10 +242,13 @@ class SequencerGuiApp:
         self._apply_edit_policy("split_selected")
         children = node.split_equal(parts)
         if children:
-            self.set_selected_node(node=children[0], path=f"{path}.0")
+            self.selected_node = children[0]
+            self.selected_node_path = f"{path}.0"
         else:
-            self.clear_selection()
+            self.selected_node = None
+            self.selected_node_path = None
         self.refresh_bar_views()
+        self.refresh_selection_views()
 
     def _clear_path(self, path: str) -> None:
         node = self._node_map().get(path)
@@ -243,6 +265,10 @@ class SequencerGuiApp:
         self._set_leaf_sample_slot(node=node, path=path, slot=slot, status_message=f"Assigned slot {slot} to selected leaf")
 
     def _template_stub(self, path: str) -> None:
+        next_selection = self._first_leaf_under_path(path)
+        if next_selection is not None:
+            self.selected_node_path, self.selected_node = next_selection
+            self.refresh_selection_views()
         QMessageBox.information(self.window, "Template", f"Apply template is a stub in MVP. (path={path})")
 
     def _set_slot_for_selected(self, slot: int) -> None:

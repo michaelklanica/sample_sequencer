@@ -55,10 +55,14 @@ class ActiveVoice:
     audio: np.ndarray
     frame_position: int
     gain: float
+    choke_group: int | None
+    choke_fade_remaining_samples: int = 0
+    choke_fade_total_samples: int = 0
 
 
 class RealtimeLooper:
     """Callback-driven looping playback for bar, pattern, or chain loop transports."""
+    CHOKE_FADE_MS = 5.0
 
     def __init__(self, sample_library: SampleLibrary, bpm: float, headroom_gain: float = 0.8) -> None:
         if bpm <= 0:
@@ -349,8 +353,23 @@ class RealtimeLooper:
             if event.trigger_frame >= start_frame:
                 maybe_voice = self._voice_for_prepared_event_locked(event)
                 if maybe_voice is not None:
+                    self._choke_matching_voices_locked(maybe_voice.choke_group)
                     self._voices.append(maybe_voice)
             self._event_index += 1
+
+    def _choke_matching_voices_locked(self, choke_group: int | None) -> None:
+        if choke_group is None:
+            return
+        sample_rate = self._sample_library.sample_rate
+        if sample_rate is None:
+            return
+        fade_samples = max(1, int(sample_rate * self.CHOKE_FADE_MS / 1000.0))
+        for voice in self._voices:
+            if voice.choke_group != choke_group:
+                continue
+            voice.choke_fade_total_samples = fade_samples
+            if voice.choke_fade_remaining_samples <= 0:
+                voice.choke_fade_remaining_samples = fade_samples
 
     def _voice_for_prepared_event_locked(self, event: PreparedTriggerEvent) -> ActiveVoice | None:
         slot = event.leaf.sample_slot
@@ -369,7 +388,8 @@ class RealtimeLooper:
             audio = audio.mean(axis=1, keepdims=True)
 
         gain = float(event.leaf.velocity) * self._headroom_gain
-        return ActiveVoice(audio=audio, frame_position=0, gain=gain)
+        choke_group = self._sample_library.choke_group(slot)
+        return ActiveVoice(audio=audio, frame_position=0, gain=gain, choke_group=choke_group)
 
     def _mix_voices_locked(self, outdata: np.ndarray) -> None:
         if not self._voices:
@@ -385,10 +405,24 @@ class RealtimeLooper:
 
             take = min(out_frames, remaining)
             src = voice.audio[voice.frame_position : voice.frame_position + take, :]
-            outdata[:take, :] += src * voice.gain
+            scaled = src * voice.gain
+            if voice.choke_fade_remaining_samples > 0 and voice.choke_fade_total_samples > 0:
+                fade_take = min(take, voice.choke_fade_remaining_samples)
+                fade_curve = (
+                    np.arange(voice.choke_fade_remaining_samples, voice.choke_fade_remaining_samples - fade_take, -1)
+                    / float(voice.choke_fade_total_samples)
+                ).astype(np.float32, copy=False)
+                scaled[:fade_take, :] *= fade_curve[:, np.newaxis]
+                if fade_take < take:
+                    scaled[fade_take:, :] = 0.0
+                voice.choke_fade_remaining_samples = max(0, voice.choke_fade_remaining_samples - take)
+
+            outdata[:take, :] += scaled
             voice.frame_position += take
 
-            if voice.frame_position < voice.audio.shape[0]:
+            if voice.frame_position < voice.audio.shape[0] and (
+                voice.choke_fade_total_samples == 0 or voice.choke_fade_remaining_samples > 0
+            ):
                 next_voices.append(voice)
 
         self._voices = next_voices

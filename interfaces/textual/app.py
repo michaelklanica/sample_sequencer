@@ -1494,6 +1494,8 @@ def _load_samples_from_project(library: SampleLibrary, project: LoadedPatternPro
     for slot, wav_path in sorted(project.sample_slot_files.items()):
         if wav_path.exists():
             library.load_wav_into_slot(slot, wav_path)
+    for slot, choke_group in sorted(project.slot_choke_groups.items()):
+        library.set_choke_group(slot, choke_group)
 
 
 def launch_textual_app(json_file: Path | None = None) -> None:

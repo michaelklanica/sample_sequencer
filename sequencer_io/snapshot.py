@@ -84,3 +84,14 @@ def deserialize_sample_slot_files(payload: dict[str, Any]) -> dict[int, Path]:
     for raw_slot, filename in payload.items():
         mapping[int(raw_slot)] = Path(filename).expanduser().resolve()
     return mapping
+
+
+def serialize_slot_choke_groups(sample_library: Any) -> dict[str, int]:
+    return sample_library.serialized_choke_groups()
+
+
+def deserialize_slot_choke_groups(payload: dict[str, Any]) -> dict[int, int]:
+    mapping: dict[int, int] = {}
+    for raw_slot, raw_group in payload.items():
+        mapping[int(raw_slot)] = int(raw_group)
+    return mapping

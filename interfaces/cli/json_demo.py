@@ -23,6 +23,8 @@ def _load_samples_from_mapping(library: SampleLibrary, project: LoadedPatternPro
                 f"(source JSON: {project.source_path})"
             )
         library.load_wav_into_slot(slot, wav_path)
+    for slot, choke_group in sorted(project.slot_choke_groups.items()):
+        library.set_choke_group(slot, choke_group)
 
 
 def _print_pattern_debug(pattern: Pattern, bpm: float, name: str) -> None:

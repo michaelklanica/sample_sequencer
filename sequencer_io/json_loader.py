@@ -19,6 +19,7 @@ class LoadedPatternProject:
     bpm: float
     sample_folder: Path
     sample_slot_files: dict[int, Path]
+    slot_choke_groups: dict[int, int]
     pattern: Pattern
 
 
@@ -86,6 +87,12 @@ def load_pattern_project_from_json(json_path: Path | str) -> LoadedPatternProjec
             resolved = (sample_folder / file_path).resolve()
         sample_slot_files[slot] = resolved
 
+    slot_choke_groups_raw = data.get("slot_choke_groups", {})
+    if isinstance(slot_choke_groups_raw, dict):
+        slot_choke_groups = {int(raw_slot): int(group) for raw_slot, group in slot_choke_groups_raw.items()}
+    else:
+        slot_choke_groups = {}
+
     pattern = Pattern(bars=bars, bpm=float(data["bpm"]), playback_order=data.get("playback_order"))
     return LoadedPatternProject(
         source_path=source_path,
@@ -93,5 +100,6 @@ def load_pattern_project_from_json(json_path: Path | str) -> LoadedPatternProjec
         bpm=pattern.bpm,
         sample_folder=sample_folder,
         sample_slot_files=sample_slot_files,
+        slot_choke_groups=slot_choke_groups,
         pattern=pattern,
     )

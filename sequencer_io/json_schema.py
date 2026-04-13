@@ -124,6 +124,20 @@ def validate_pattern_json(data: Any) -> None:
         if not isinstance(filename, str) or not filename.strip():
             raise _err(f"$.sample_slots['{slot}']", "filename must be a non-empty string")
 
+    slot_choke_groups = data.get("slot_choke_groups")
+    if slot_choke_groups is not None:
+        if not isinstance(slot_choke_groups, dict):
+            raise _err("$.slot_choke_groups", "slot_choke_groups must be an object mapping slot ids to choke group ids")
+        for raw_slot, raw_group in slot_choke_groups.items():
+            slot = _validate_slot_id(raw_slot, "$.slot_choke_groups")
+            if isinstance(raw_group, bool) or not isinstance(raw_group, int):
+                raise _err(
+                    f"$.slot_choke_groups['{slot}']",
+                    "choke group must be a positive integer",
+                )
+            if raw_group <= 0:
+                raise _err(f"$.slot_choke_groups['{slot}']", "choke group must be >= 1")
+
 
     playback_order = data.get("playback_order")
     if playback_order is not None:

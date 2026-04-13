@@ -22,10 +22,12 @@ from sequencer_io import (
     LoadedPatternProject,
     deserialize_pattern,
     deserialize_sample_slot_files,
+    deserialize_slot_choke_groups,
     load_pattern_project_from_json,
     save_pattern_project_to_json,
     serialize_pattern,
     serialize_sample_slot_files,
+    serialize_slot_choke_groups,
 )
 
 
@@ -45,6 +47,8 @@ class SequencerGuiApp:
             for slot, wav_path in project.sample_slot_files.items():
                 if wav_path.exists():
                     self.sample_library.load_wav_into_slot(slot, wav_path)
+            for slot, choke_group in project.slot_choke_groups.items():
+                self.sample_library.set_choke_group(slot, choke_group)
 
         self.current_bar_index: int = 0
         self.selected_node: RhythmNode | None = None
@@ -83,6 +87,7 @@ class SequencerGuiApp:
         w.inspector_panel.clearRequested.connect(self._reset_selected_subtree)
         w.inspector_panel.templateRequested.connect(self._apply_template_to_selected)
         w.inspector_panel.bpmChanged.connect(self.set_bpm)
+        w.inspector_panel.chokeGroupChanged.connect(self._set_choke_group_for_selected_slot)
 
         w.slot_panel.slotClicked.connect(self._assign_slot_from_panel)
         w.slot_panel.slotDoubleClicked.connect(self._audition_slot)
@@ -192,6 +197,9 @@ class SequencerGuiApp:
         self.window.inspector_panel.set_node(self.current_bar_index, self.selected_node_path, self.selected_node)
         self.window.slot_panel.set_assignment_enabled(self._selected_leaf() is not None)
         self.window.slot_panel.set_selected_slot(self._selected_slot_for_ui())
+        selected_slot = self._selected_slot_for_ui()
+        selected_choke = self.sample_library.choke_group(selected_slot) if selected_slot is not None else None
+        self.window.inspector_panel.set_selected_slot_choke_group(selected_choke)
         self._refresh_transport()
 
     def refresh_ui(self) -> None:
@@ -217,6 +225,7 @@ class SequencerGuiApp:
             "export_mode": self.export_mode,
             "pattern": serialize_pattern(self.pattern),
             "sample_slots": serialize_sample_slot_files(self.sample_library),
+            "slot_choke_groups": serialize_slot_choke_groups(self.sample_library),
         }
 
     def begin_mutating_action(self, label: str = "") -> None:
@@ -231,11 +240,14 @@ class SequencerGuiApp:
         self.export_mode = str(snapshot.get("export_mode", "truncate"))
         self.pattern = deserialize_pattern(dict(snapshot["pattern"]))
         sample_slot_files = deserialize_sample_slot_files(dict(snapshot.get("sample_slots", {})))
+        slot_choke_groups = deserialize_slot_choke_groups(dict(snapshot.get("slot_choke_groups", {})))
 
         self.sample_library = SampleLibrary()
         for slot, wav_path in sample_slot_files.items():
             if wav_path.exists():
                 self.sample_library.load_wav_into_slot(slot, wav_path)
+        for slot, choke_group in slot_choke_groups.items():
+            self.sample_library.set_choke_group(slot, choke_group)
         self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.pattern.bpm)
 
         self.current_bar_index = min(self.current_bar_index, len(self.pattern.bars) - 1)
@@ -467,6 +479,20 @@ class SequencerGuiApp:
     def _set_pitch_for_selected(self, pitch: int) -> None:
         self.set_selected_leaf_pitch_offset(pitch)
 
+    def _set_choke_group_for_selected_slot(self, choke_group: int) -> None:
+        selected_slot = self._selected_slot_for_ui()
+        if selected_slot is None:
+            return
+        normalized_group = None if choke_group <= 0 else int(choke_group)
+        if self.sample_library.choke_group(selected_slot) == normalized_group:
+            return
+        label = "None" if normalized_group is None else str(normalized_group)
+        self.begin_mutating_action(f"Set slot {selected_slot} choke group to {label}")
+        self.sample_library.set_choke_group(selected_slot, normalized_group)
+        self._is_dirty = True
+        self.window.inspector_panel.set_selected_slot_choke_group(normalized_group)
+        self._set_ui_status(f"Set choke group for slot {selected_slot} to {label}")
+
     def set_selected_leaf_pitch_offset(self, pitch: int) -> None:
         selected = self._selected_leaf()
         if selected is None:
@@ -667,6 +693,8 @@ class SequencerGuiApp:
         for slot, wav_path in project.sample_slot_files.items():
             if wav_path.exists():
                 self.sample_library.load_wav_into_slot(slot, wav_path)
+        for slot, choke_group in project.slot_choke_groups.items():
+            self.sample_library.set_choke_group(slot, choke_group)
         self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.pattern.bpm)
         self.current_bar_index = 0
         self.selected_node = None

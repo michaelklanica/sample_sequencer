@@ -14,6 +14,7 @@ from engine.edit_policy import classify_edit, invalidation_reason
 from engine.pattern import create_blank_pattern
 from engine.power_tools import apply_subtree_template
 from engine.rhythm_tree import RhythmNode
+from sample_sequencer.gui.export_dialog import ExportDialog
 from sample_sequencer.gui.main_window import MainWindow
 from sample_sequencer.gui.template_defs import TEMPLATE_BY_ID
 from sequencer_io import LoadedPatternProject, load_pattern_project_from_json, save_pattern_project_to_json
@@ -40,6 +41,7 @@ class SequencerGuiApp:
         self.selected_node: RhythmNode | None = None
         self.selected_node_path: str | None = None
         self.transport_mode = "bar"
+        self.export_mode = "truncate"
         self._ui_status_message: str | None = None
         self._is_dirty = False
 
@@ -82,6 +84,7 @@ class SequencerGuiApp:
         w.saveClicked.connect(self._save_project)
         w.loadClicked.connect(self._load_project)
         w.exportClicked.connect(self._export)
+        w.exportModeChanged.connect(self._set_export_mode)
         w.loadSamplesClicked.connect(self._choose_and_load_samples)
         w.reloadSamplesClicked.connect(self._reload_samples)
         w.bpmChanged.connect(self.set_bpm)
@@ -184,6 +187,7 @@ class SequencerGuiApp:
         self.window.timeline_widget.set_sample_library(self.sample_library)
         self.window.slot_panel.set_library(self.sample_library)
         self.window.inspector_panel.set_sample_library(self.sample_library)
+        self.window.set_export_mode(self.export_mode)
         self.window.set_bpm_value(self.pattern.bpm)
         self.window.inspector_panel.set_bpm_value(self.pattern.bpm)
         self.refresh_bar_views()
@@ -424,6 +428,9 @@ class SequencerGuiApp:
         mapping = {"Bar": "bar", "Pattern": "pattern", "Chain": "chain"}
         self.transport_mode = mapping.get(mode, "bar")
 
+    def _set_export_mode(self, mode: str) -> None:
+        self.export_mode = mode if mode in {"truncate", "wrap", "tail"} else "truncate"
+
     def _has_loaded_samples(self) -> bool:
         return self.sample_library.sample_rate is not None and bool(self.sample_library.loaded_slots())
 
@@ -471,6 +478,8 @@ class SequencerGuiApp:
         self._is_dirty = False
         self.project_path = None
         self._ui_status_message = None
+        self.export_mode = "truncate"
+        self.window.set_export_mode(self.export_mode)
         self.refresh_ui()
 
     def _choose_and_load_samples(self) -> None:
@@ -569,9 +578,17 @@ class SequencerGuiApp:
         self.selected_node_path = None
         self._is_dirty = False
         self._ui_status_message = None
+        self.export_mode = "truncate"
+        self.window.set_export_mode(self.export_mode)
         self.refresh_ui()
 
     def _export(self) -> None:
+        dialog = ExportDialog(current_mode=self.export_mode, parent=self.window)
+        if dialog.exec() == 0:
+            return
+        selected_mode = dialog.selected_mode()
+        self.export_mode = selected_mode
+        self.window.set_export_mode(selected_mode)
         output = export_pattern(
             self.pattern,
             self.sample_library,
@@ -579,8 +596,9 @@ class SequencerGuiApp:
             filename_prefix=self.pattern_name,
             sample_rate=int(round(self.sample_library.sample_rate or 44100)),
             normalize=True,
+            mode=selected_mode,
         )
-        QMessageBox.information(self.window, "Export", f"Exported to {output}")
+        QMessageBox.information(self.window, "Export", f"Exported to {output}\nMode: {selected_mode}")
 
     def _apply_edit_policy(self, action_name: str) -> bool:
         classification = classify_edit(action_name)

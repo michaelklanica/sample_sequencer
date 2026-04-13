@@ -8,6 +8,11 @@ import soundfile as sf
 from audio.renderer import OfflineRenderer
 from audio.sample_library import SampleLibrary
 from engine.pattern import Pattern
+from engine.timeline import pattern_duration_seconds
+
+
+EXPORT_MODES = ("truncate", "wrap", "tail")
+MAX_TAIL_SECONDS = 20.0
 
 
 def _resolve_bpm(pattern: Pattern) -> float:
@@ -44,6 +49,7 @@ def export_pattern(
     filename_prefix: str,
     sample_rate: int = 44100,
     normalize: bool = True,
+    mode: str = "truncate",
 ) -> str:
     """
     Renders full pattern (respecting playback chain) and writes to WAV.
@@ -58,13 +64,51 @@ def export_pattern(
             f"Sample library sample_rate is {sample_library.sample_rate}; cannot export at requested {sample_rate}."
         )
 
+    normalized_mode = mode.strip().lower()
+    if normalized_mode not in EXPORT_MODES:
+        raise ValueError(f"Unsupported export mode '{mode}'. Expected one of: {', '.join(EXPORT_MODES)}.")
+
     renderer = OfflineRenderer(headroom_gain=1.0)
     bpm = _resolve_bpm(pattern)
-    rendered = renderer.render_pattern(pattern, sample_library, bpm=bpm)
-    audio = _normalize_audio(rendered.buffer, enabled=normalize)
+    cycle_duration = pattern_duration_seconds(pattern, bpm=bpm)
+
+    if normalized_mode == "truncate":
+        rendered = renderer.render_pattern(pattern, sample_library, bpm=bpm)
+        audio = rendered.buffer
+    elif normalized_mode == "wrap":
+        rendered = renderer.render_pattern_with_length(
+            pattern,
+            sample_library,
+            bpm=bpm,
+            total_seconds=2.0 * cycle_duration,
+            cycle_count=2,
+        )
+        split_frame = max(1, int(round(cycle_duration * rendered.sample_rate)))
+        first = rendered.buffer[:split_frame, :]
+        second = rendered.buffer[split_frame : split_frame * 2, :]
+        if second.shape[0] < first.shape[0]:
+            second = np.pad(second, ((0, first.shape[0] - second.shape[0]), (0, 0)))
+        audio = first + second[: first.shape[0], :]
+    else:
+        slot_lengths: list[float] = []
+        if sample_library.sample_rate:
+            for slot in sample_library.loaded_slots():
+                sample = sample_library.get(slot)
+                slot_lengths.append(float(sample.audio.shape[0]) / float(sample_library.sample_rate))
+        max_tail = min(max(slot_lengths, default=0.0), MAX_TAIL_SECONDS)
+        rendered = renderer.render_pattern_with_length(
+            pattern,
+            sample_library,
+            bpm=bpm,
+            total_seconds=cycle_duration + max_tail,
+            cycle_count=1,
+        )
+        audio = rendered.buffer
+
+    audio = _normalize_audio(audio, enabled=normalize)
 
     prefix = _safe_prefix(filename_prefix)
-    file_path = output_dir / f"{prefix}_bpm{_format_bpm_tag(bpm)}.wav"
+    file_path = output_dir / f"{prefix}_bpm{_format_bpm_tag(bpm)}_{normalized_mode}.wav"
     sf.write(file_path, audio, samplerate=rendered.sample_rate)
     return str(file_path)
 

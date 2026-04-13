@@ -29,6 +29,7 @@ class MainWindow(QMainWindow):
     saveClicked = Signal()
     loadClicked = Signal()
     exportClicked = Signal()
+    exportModeChanged = Signal(str)
     loadSamplesClicked = Signal()
     reloadSamplesClicked = Signal()
     bpmChanged = Signal(float)
@@ -51,6 +52,11 @@ class MainWindow(QMainWindow):
         self.save_btn = QPushButton("Save")
         self.load_btn = QPushButton("Load")
         self.export_btn = QPushButton("Export")
+        self.export_mode_label = QLabel("Export Mode:")
+        self.export_mode_combo = QComboBox()
+        self.export_mode_combo.addItem("Truncate", userData="truncate")
+        self.export_mode_combo.addItem("Wrap", userData="wrap")
+        self.export_mode_combo.addItem("Tail", userData="tail")
         self.load_samples_btn = QPushButton("Load Samples")
         self.reload_samples_btn = QPushButton("Reload Samples")
         self.bpm_label = QLabel("BPM:")
@@ -67,6 +73,8 @@ class MainWindow(QMainWindow):
             self.save_btn,
             self.load_btn,
             self.export_btn,
+            self.export_mode_label,
+            self.export_mode_combo,
             self.load_samples_btn,
             self.reload_samples_btn,
             self.bpm_label,
@@ -109,6 +117,7 @@ class MainWindow(QMainWindow):
         self.save_btn.clicked.connect(self.saveClicked.emit)
         self.load_btn.clicked.connect(self.loadClicked.emit)
         self.export_btn.clicked.connect(self.exportClicked.emit)
+        self.export_mode_combo.currentIndexChanged.connect(self._emit_export_mode_changed)
         self.load_samples_btn.clicked.connect(self.loadSamplesClicked.emit)
         self.reload_samples_btn.clicked.connect(self.reloadSamplesClicked.emit)
         self.mode_combo.currentTextChanged.connect(self.modeChanged.emit)
@@ -118,3 +127,17 @@ class MainWindow(QMainWindow):
         blocker = QSignalBlocker(self.bpm_spin)
         self.bpm_spin.setValue(bpm)
         del blocker
+
+    def _emit_export_mode_changed(self) -> None:
+        self.exportModeChanged.emit(self.export_mode())
+
+    def export_mode(self) -> str:
+        return str(self.export_mode_combo.currentData() or "truncate")
+
+    def set_export_mode(self, mode: str) -> None:
+        for idx in range(self.export_mode_combo.count()):
+            if self.export_mode_combo.itemData(idx) == mode:
+                blocker = QSignalBlocker(self.export_mode_combo)
+                self.export_mode_combo.setCurrentIndex(idx)
+                del blocker
+                return

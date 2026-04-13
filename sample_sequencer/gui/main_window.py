@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSignalBlocker, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -26,6 +27,8 @@ class MainWindow(QMainWindow):
     playClicked = Signal()
     stopClicked = Signal()
     newClicked = Signal()
+    undoClicked = Signal()
+    redoClicked = Signal()
     saveClicked = Signal()
     loadClicked = Signal()
     exportClicked = Signal()
@@ -49,6 +52,8 @@ class MainWindow(QMainWindow):
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Bar", "Pattern", "Chain"])
         self.new_btn = QPushButton("New")
+        self.undo_btn = QPushButton("Undo")
+        self.redo_btn = QPushButton("Redo")
         self.save_btn = QPushButton("Save")
         self.load_btn = QPushButton("Load")
         self.export_btn = QPushButton("Export")
@@ -70,6 +75,8 @@ class MainWindow(QMainWindow):
             self.stop_btn,
             self.mode_combo,
             self.new_btn,
+            self.undo_btn,
+            self.redo_btn,
             self.save_btn,
             self.load_btn,
             self.export_btn,
@@ -114,6 +121,8 @@ class MainWindow(QMainWindow):
         self.play_btn.clicked.connect(self.playClicked.emit)
         self.stop_btn.clicked.connect(self.stopClicked.emit)
         self.new_btn.clicked.connect(self.newClicked.emit)
+        self.undo_btn.clicked.connect(self.undoClicked.emit)
+        self.redo_btn.clicked.connect(self.redoClicked.emit)
         self.save_btn.clicked.connect(self.saveClicked.emit)
         self.load_btn.clicked.connect(self.loadClicked.emit)
         self.export_btn.clicked.connect(self.exportClicked.emit)
@@ -122,6 +131,12 @@ class MainWindow(QMainWindow):
         self.reload_samples_btn.clicked.connect(self.reloadSamplesClicked.emit)
         self.mode_combo.currentTextChanged.connect(self.modeChanged.emit)
         self.bpm_spin.valueChanged.connect(self.bpmChanged.emit)
+        self.undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self.undo_shortcut.activated.connect(self.undoClicked.emit)
+        self.redo_shortcut_shift = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
+        self.redo_shortcut_shift.activated.connect(self.redoClicked.emit)
+        self.redo_shortcut_y = QShortcut(QKeySequence("Ctrl+Y"), self)
+        self.redo_shortcut_y.activated.connect(self.redoClicked.emit)
 
     def set_bpm_value(self, bpm: float) -> None:
         blocker = QSignalBlocker(self.bpm_spin)
@@ -141,3 +156,7 @@ class MainWindow(QMainWindow):
                 self.export_mode_combo.setCurrentIndex(idx)
                 del blocker
                 return
+
+    def set_undo_redo_enabled(self, can_undo: bool, can_redo: bool) -> None:
+        self.undo_btn.setEnabled(can_undo)
+        self.redo_btn.setEnabled(can_redo)

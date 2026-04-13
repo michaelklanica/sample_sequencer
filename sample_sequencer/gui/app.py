@@ -17,7 +17,16 @@ from engine.rhythm_tree import RhythmNode
 from sample_sequencer.gui.export_dialog import ExportDialog
 from sample_sequencer.gui.main_window import MainWindow
 from sample_sequencer.gui.template_defs import TEMPLATE_BY_ID
-from sequencer_io import LoadedPatternProject, load_pattern_project_from_json, save_pattern_project_to_json
+from sample_sequencer.gui.undo_manager import UndoManager
+from sequencer_io import (
+    LoadedPatternProject,
+    deserialize_pattern,
+    deserialize_sample_slot_files,
+    load_pattern_project_from_json,
+    save_pattern_project_to_json,
+    serialize_pattern,
+    serialize_sample_slot_files,
+)
 
 
 class SequencerGuiApp:
@@ -44,6 +53,7 @@ class SequencerGuiApp:
         self.export_mode = "truncate"
         self._ui_status_message: str | None = None
         self._is_dirty = False
+        self.undo_manager = UndoManager(max_history=100)
 
         self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.pattern.bpm)
 
@@ -81,6 +91,8 @@ class SequencerGuiApp:
         w.playClicked.connect(self._play)
         w.stopClicked.connect(self._stop)
         w.newClicked.connect(self._new_project)
+        w.undoClicked.connect(self._undo)
+        w.redoClicked.connect(self._redo)
         w.saveClicked.connect(self._save_project)
         w.loadClicked.connect(self._load_project)
         w.exportClicked.connect(self._export)
@@ -190,8 +202,75 @@ class SequencerGuiApp:
         self.window.set_export_mode(self.export_mode)
         self.window.set_bpm_value(self.pattern.bpm)
         self.window.inspector_panel.set_bpm_value(self.pattern.bpm)
+        self._update_undo_redo_state()
         self.refresh_bar_views()
         self.refresh_selection_views()
+
+    def _update_undo_redo_state(self) -> None:
+        self.window.set_undo_redo_enabled(self.undo_manager.can_undo(), self.undo_manager.can_redo())
+
+    def _capture_project_snapshot(self) -> dict[str, object]:
+        return {
+            "pattern_name": self.pattern_name,
+            "sample_folder": str(self.sample_folder.resolve()),
+            "project_path": str(self.project_path.resolve()) if self.project_path else None,
+            "export_mode": self.export_mode,
+            "pattern": serialize_pattern(self.pattern),
+            "sample_slots": serialize_sample_slot_files(self.sample_library),
+        }
+
+    def begin_mutating_action(self, label: str = "") -> None:
+        self.undo_manager.push_undo(self._capture_project_snapshot(), label=label)
+        self._update_undo_redo_state()
+
+    def _restore_project_snapshot(self, snapshot: dict[str, object]) -> None:
+        self.pattern_name = str(snapshot["pattern_name"])
+        self.sample_folder = Path(str(snapshot["sample_folder"])).expanduser().resolve()
+        project_path = snapshot.get("project_path")
+        self.project_path = Path(str(project_path)).expanduser().resolve() if project_path else None
+        self.export_mode = str(snapshot.get("export_mode", "truncate"))
+        self.pattern = deserialize_pattern(dict(snapshot["pattern"]))
+        sample_slot_files = deserialize_sample_slot_files(dict(snapshot.get("sample_slots", {})))
+
+        self.sample_library = SampleLibrary()
+        for slot, wav_path in sample_slot_files.items():
+            if wav_path.exists():
+                self.sample_library.load_wav_into_slot(slot, wav_path)
+        self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.pattern.bpm)
+
+        self.current_bar_index = min(self.current_bar_index, len(self.pattern.bars) - 1)
+        self.selected_node = None
+        self.selected_node_path = None
+        self.refresh_ui()
+
+    def _stop_playback_before_history_restore(self, operation: str) -> None:
+        if self.realtime_looper.is_playing:
+            self.realtime_looper.stop(reason=f"{operation} restore")
+            self._set_ui_status(f"Stopped realtime playback before {operation}.")
+
+    def _undo(self) -> None:
+        if not self.undo_manager.can_undo():
+            return
+        self._stop_playback_before_history_restore("undo")
+        entry = self.undo_manager.undo(self._capture_project_snapshot())
+        if entry is None:
+            return
+        self._restore_project_snapshot(entry.snapshot)
+        self._is_dirty = True
+        self._update_undo_redo_state()
+        self._set_ui_status(f"Undo: {entry.label}" if entry.label else "Undo performed")
+
+    def _redo(self) -> None:
+        if not self.undo_manager.can_redo():
+            return
+        self._stop_playback_before_history_restore("redo")
+        entry = self.undo_manager.redo(self._capture_project_snapshot())
+        if entry is None:
+            return
+        self._restore_project_snapshot(entry.snapshot)
+        self._is_dirty = True
+        self._update_undo_redo_state()
+        self._set_ui_status(f"Redo: {entry.label}" if entry.label else "Redo performed")
 
     def set_bpm(self, bpm: float) -> None:
         requested_bpm = float(bpm)
@@ -206,6 +285,7 @@ class SequencerGuiApp:
             self.realtime_looper.stop(reason="bpm changed")
             status_parts.append("Playback stopped due to BPM change.")
 
+        self.begin_mutating_action(f"Set BPM to {normalized_bpm:.1f}")
         self.pattern.set_bpm(normalized_bpm)
         self.realtime_looper.update_bpm(self.pattern.bpm)
         self._is_dirty = True
@@ -249,6 +329,8 @@ class SequencerGuiApp:
         changed = False
         for leaf in leaves:
             if leaf.sample_slot is not None or abs(leaf.velocity - 1.0) > 1e-9 or leaf.pitch_offset != 0:
+                if not changed:
+                    self.begin_mutating_action("Reset selected subtree")
                 leaf.assign(sample_slot=None, velocity=1.0, pitch_offset=0)
                 changed = True
         if not changed:
@@ -268,6 +350,7 @@ class SequencerGuiApp:
         node = self._node_map().get(path)
         if node is None or not node.is_leaf():
             return
+        self.begin_mutating_action(f"Split node into {parts}")
         self._apply_edit_policy("split_selected")
         children = node.split_equal(parts)
         if children:
@@ -310,6 +393,11 @@ class SequencerGuiApp:
             return
 
         playing_before = self.realtime_looper.is_playing
+        if template_id not in TEMPLATE_BY_ID:
+            self._set_ui_status(f"Unknown template: {template_id}")
+            return
+        label = TEMPLATE_BY_ID[template_id].label
+        self.begin_mutating_action(f"Apply template '{label}'")
         self._apply_edit_policy("apply_subtree_template")
 
         try:
@@ -320,7 +408,6 @@ class SequencerGuiApp:
             return
 
         self._is_dirty = True
-        label = TEMPLATE_BY_ID.get(template_id).label if template_id in TEMPLATE_BY_ID else template_id
         next_selection = self._first_leaf_descendant(node, path)
         if next_selection is not None:
             self.selected_node_path, self.selected_node = next_selection
@@ -354,6 +441,10 @@ class SequencerGuiApp:
     def _set_leaf_sample_slot(self, node: RhythmNode, path: str, slot: int | None, status_message: str) -> None:
         if node.sample_slot == slot:
             return
+        if slot is None:
+            self.begin_mutating_action("Set leaf rest")
+        else:
+            self.begin_mutating_action(f"Set leaf slot to {slot}")
         self._apply_edit_policy("set_slot")
         node.assign(sample_slot=slot, velocity=node.velocity, pitch_offset=node.pitch_offset)
         self._apply_leaf_value_changes(node=node, path=path, status_message=status_message)
@@ -368,6 +459,7 @@ class SequencerGuiApp:
         path, node = selected
         if abs(node.velocity - velocity) < 1e-9:
             return
+        self.begin_mutating_action(f"Set velocity to {velocity:.2f}")
         self._apply_edit_policy("set_velocity")
         node.assign(sample_slot=node.sample_slot, velocity=velocity, pitch_offset=node.pitch_offset)
         self._apply_leaf_value_changes(node=node, path=path, status_message=f"Updated velocity to {velocity:.2f}")
@@ -382,6 +474,7 @@ class SequencerGuiApp:
         path, node = selected
         if node.pitch_offset == pitch:
             return
+        self.begin_mutating_action(f"Set pitch offset to {pitch}")
         self._apply_edit_policy("set_pitch_offset")
         node.assign(sample_slot=node.sample_slot, velocity=node.velocity, pitch_offset=pitch)
         self._apply_leaf_value_changes(node=node, path=path, status_message=f"Updated pitch offset to {pitch}")
@@ -469,6 +562,7 @@ class SequencerGuiApp:
         self.realtime_looper.stop(reason="user")
 
     def _new_project(self) -> None:
+        self.begin_mutating_action("New project")
         self._apply_edit_policy("new_pattern")
         self.pattern = create_blank_pattern("Untitled", bpm=120.0, numerator=4, denominator=4)
         self.pattern_name = "Untitled"
@@ -528,6 +622,7 @@ class SequencerGuiApp:
             self._set_ui_status("No valid WAV files could be loaded from selected folder.")
             return
 
+        self.begin_mutating_action("Load samples from folder")
         self.sample_folder = folder
         self.sample_library = fresh_library
         self.realtime_looper = RealtimeLooper(sample_library=self.sample_library, bpm=self.pattern.bpm)
@@ -580,6 +675,7 @@ class SequencerGuiApp:
         self._ui_status_message = None
         self.export_mode = "truncate"
         self.window.set_export_mode(self.export_mode)
+        self.undo_manager.clear()
         self.refresh_ui()
 
     def _export(self) -> None:

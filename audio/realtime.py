@@ -219,6 +219,11 @@ class RealtimeLooper:
             self._last_stop_reason = resolved_reason
             self._status_message = f"Stopped: {resolved_reason}."
 
+    def update_bpm(self, bpm: float) -> None:
+        with self._lock:
+            self._bpm = Pattern.clamp_bpm(bpm)
+            self._status_message = f"BPM set to {self._bpm:.2f}."
+
     def shutdown(self) -> None:
         self.stop()
         if self._stream is not None:

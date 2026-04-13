@@ -11,8 +11,7 @@ from engine.pattern import Pattern
 
 
 def _resolve_bpm(pattern: Pattern) -> float:
-    bpm = getattr(pattern, "bpm", 120.0)
-    return float(bpm)
+    return float(pattern.bpm)
 
 
 def _format_bpm_tag(bpm: float) -> str:

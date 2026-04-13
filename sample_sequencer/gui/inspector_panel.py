@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QDoubleSpinBox,
     QSlider,
     QSpinBox,
     QVBoxLayout,
@@ -28,10 +29,16 @@ class InspectorPanel(QWidget):
     splitRequested = Signal(int)
     clearRequested = Signal()
     templateRequested = Signal(str)
+    bpmChanged = Signal(float)
 
     def __init__(self) -> None:
         super().__init__()
         self._bar_index: int | None = None
+        self._bpm = QDoubleSpinBox()
+        self._bpm.setRange(20.0, 300.0)
+        self._bpm.setSingleStep(1.0)
+        self._bpm.setDecimals(1)
+        self._bpm.setValue(120.0)
 
         self._summary = QLabel("No node selected")
         self._summary.setWordWrap(True)
@@ -61,6 +68,9 @@ class InspectorPanel(QWidget):
         self._internal_info.setWordWrap(True)
 
         main = QVBoxLayout(self)
+        project_group = QGroupBox("Project")
+        project_form = QFormLayout(project_group)
+        project_form.addRow("BPM", self._bpm)
 
         summary_group = QGroupBox("Selection Summary")
         summary_form = QFormLayout(summary_group)
@@ -131,6 +141,7 @@ class InspectorPanel(QWidget):
         info_layout.addWidget(self._helper_text)
         info_layout.addWidget(self._internal_info)
 
+        main.addWidget(project_group)
         main.addWidget(summary_group)
         main.addWidget(event_group)
         main.addWidget(structure_group)
@@ -142,10 +153,16 @@ class InspectorPanel(QWidget):
         self._pitch.valueChanged.connect(self.pitchChanged.emit)
         self._set_rest_btn.clicked.connect(self._set_rest)
         self._template_combo.currentIndexChanged.connect(self._update_template_description)
+        self._bpm.valueChanged.connect(self.bpmChanged.emit)
 
         self._set_leaf_controls_enabled(False)
         self._set_structure_enabled(selection_exists=False, leaf_selected=False)
         self._show_mode_help(show_none=True, show_internal=False)
+
+    def set_bpm_value(self, bpm: float) -> None:
+        blocker = QSignalBlocker(self._bpm)
+        self._bpm.setValue(bpm)
+        del blocker
 
     def set_sample_library(self, library: SampleLibrary | None) -> None:
         blocker = QSignalBlocker(self._slot_combo)

@@ -22,6 +22,7 @@ class Bar:
 @dataclass
 class Pattern:
     bars: list[Bar]
+    bpm: float = 120.0
     playback_order: list[int] | None = None
 
     def __post_init__(self) -> None:
@@ -30,9 +31,17 @@ class Pattern:
     def validate(self) -> None:
         if len(self.bars) == 0:
             raise ValueError("Pattern must contain at least one bar.")
+        self.bpm = self.clamp_bpm(self.bpm)
 
         if self.playback_order is not None:
             self.validate_playback_order(self.playback_order, len(self.bars))
+
+    @staticmethod
+    def clamp_bpm(bpm: float) -> float:
+        return max(20.0, min(300.0, float(bpm)))
+
+    def set_bpm(self, bpm: float) -> None:
+        self.bpm = self.clamp_bpm(bpm)
 
     @staticmethod
     def validate_playback_order(order: list[int], bar_count: int) -> None:
@@ -78,7 +87,7 @@ class Pattern:
 
     @classmethod
     def one_bar(cls, time_signature: TimeSignature) -> "Pattern":
-        return cls(bars=[Bar(time_signature=time_signature)])
+        return cls(bars=[Bar(time_signature=time_signature)], bpm=120.0)
 
 
 def create_blank_bar(time_signature: TimeSignature) -> Bar:
@@ -87,15 +96,10 @@ def create_blank_bar(time_signature: TimeSignature) -> Bar:
 
 
 def create_blank_pattern(name: str, bpm: float, numerator: int, denominator: int) -> Pattern:
-    """Create a new single-bar blank pattern for authoring workflows.
-
-    The Pattern model stores bar/tree structure; metadata like name and BPM are
-    validated here for caller convenience and tracked by app/project state.
-    """
+    """Create a new single-bar blank pattern for authoring workflows."""
     if not name.strip():
         raise ValueError("Pattern name cannot be empty.")
-    if bpm <= 0:
-        raise ValueError("BPM must be greater than zero.")
+    normalized_bpm = Pattern.clamp_bpm(bpm)
 
     time_signature = TimeSignature(numerator=numerator, denominator=denominator)
-    return Pattern(bars=[create_blank_bar(time_signature=time_signature)])
+    return Pattern(bars=[create_blank_bar(time_signature=time_signature)], bpm=normalized_bpm)

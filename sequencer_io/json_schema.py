@@ -107,9 +107,9 @@ def validate_pattern_json(data: Any) -> None:
 
     bpm = data["bpm"]
     if isinstance(bpm, bool) or not isinstance(bpm, (int, float)):
-        raise _err("$.bpm", "bpm must be a positive number")
-    if float(bpm) <= 0.0:
-        raise _err("$.bpm", f"bpm must be > 0 (got {bpm})")
+        raise _err("$.bpm", "bpm must be a number in range 20..300")
+    if not (20.0 <= float(bpm) <= 300.0):
+        raise _err("$.bpm", f"bpm must be in range 20..300 (got {bpm})")
 
     sample_folder = data["sample_folder"]
     if not isinstance(sample_folder, str) or not sample_folder.strip():

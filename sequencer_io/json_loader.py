@@ -86,11 +86,12 @@ def load_pattern_project_from_json(json_path: Path | str) -> LoadedPatternProjec
             resolved = (sample_folder / file_path).resolve()
         sample_slot_files[slot] = resolved
 
+    pattern = Pattern(bars=bars, bpm=float(data["bpm"]), playback_order=data.get("playback_order"))
     return LoadedPatternProject(
         source_path=source_path,
         name=data["name"],
-        bpm=float(data["bpm"]),
+        bpm=pattern.bpm,
         sample_folder=sample_folder,
         sample_slot_files=sample_slot_files,
-        pattern=Pattern(bars=bars, playback_order=data.get("playback_order")),
+        pattern=pattern,
     )

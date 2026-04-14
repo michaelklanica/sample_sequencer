@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from sequencer_io.json_errors import PatternValidationError
+from sequencer_io.snapshot import deserialize_project
 
 
 def _err(path: str, message: str) -> PatternValidationError:
@@ -94,97 +95,49 @@ def _validate_tree_node(node: Any, path: str) -> None:
 
 
 def validate_pattern_json(data: Any) -> None:
+    """Validate canonical versioned project JSON payloads used for saves."""
     if not isinstance(data, dict):
         raise _err("$", "top-level JSON must be an object")
 
-    required_keys = ["name", "bpm", "sample_folder", "sample_slots", "bars"]
-    for key in required_keys:
-        if key not in data:
-            raise _err("$", f"missing required field '{key}'")
+    schema_version = data.get("schema_version")
+    if schema_version != 1:
+        raise _err("$.schema_version", "schema_version must be exactly 1")
 
-    if not isinstance(data["name"], str) or not data["name"].strip():
-        raise _err("$.name", "name must be a non-empty string")
+    if "project" not in data:
+        raise _err("$", "missing required field 'project'")
+    if "samples" not in data:
+        raise _err("$", "missing required field 'samples'")
 
-    bpm = data["bpm"]
-    if isinstance(bpm, bool) or not isinstance(bpm, (int, float)):
-        raise _err("$.bpm", "bpm must be a number in range 20..300")
-    if not (20.0 <= float(bpm) <= 300.0):
-        raise _err("$.bpm", f"bpm must be in range 20..300 (got {bpm})")
+    project_payload = data["project"]
+    if not isinstance(project_payload, dict):
+        raise _err("$.project", "project must be an object")
+    try:
+        deserialize_project(project_payload)
+    except Exception as exc:
+        raise _err("$.project", str(exc)) from exc
 
-    sample_folder = data["sample_folder"]
+    samples = data["samples"]
+    if not isinstance(samples, dict):
+        raise _err("$.samples", "samples must be an object")
+
+    sample_folder = samples.get("sample_folder")
     if not isinstance(sample_folder, str) or not sample_folder.strip():
-        raise _err("$.sample_folder", "sample_folder must be a non-empty string")
+        raise _err("$.samples.sample_folder", "sample_folder must be a non-empty string")
 
-    sample_slots = data["sample_slots"]
-    if not isinstance(sample_slots, dict):
-        raise _err("$.sample_slots", "sample_slots must be an object mapping slot ids to filenames")
-
-    for raw_slot, filename in sample_slots.items():
-        slot = _validate_slot_id(raw_slot, "$.sample_slots")
+    slot_files = samples.get("slot_files", {})
+    if not isinstance(slot_files, dict):
+        raise _err("$.samples.slot_files", "slot_files must be an object mapping slot ids to filenames")
+    for raw_slot, filename in slot_files.items():
+        slot = _validate_slot_id(raw_slot, "$.samples.slot_files")
         if not isinstance(filename, str) or not filename.strip():
-            raise _err(f"$.sample_slots['{slot}']", "filename must be a non-empty string")
+            raise _err(f"$.samples.slot_files['{slot}']", "filename must be a non-empty string")
 
-    slot_choke_groups = data.get("slot_choke_groups")
-    if slot_choke_groups is not None:
-        if not isinstance(slot_choke_groups, dict):
-            raise _err("$.slot_choke_groups", "slot_choke_groups must be an object mapping slot ids to choke group ids")
-        for raw_slot, raw_group in slot_choke_groups.items():
-            slot = _validate_slot_id(raw_slot, "$.slot_choke_groups")
-            if isinstance(raw_group, bool) or not isinstance(raw_group, int):
-                raise _err(
-                    f"$.slot_choke_groups['{slot}']",
-                    "choke group must be a positive integer",
-                )
-            if raw_group <= 0:
-                raise _err(f"$.slot_choke_groups['{slot}']", "choke group must be >= 1")
-
-
-    playback_order = data.get("playback_order")
-    if playback_order is not None:
-        if not isinstance(playback_order, list) or len(playback_order) == 0:
-            raise _err("$.playback_order", "playback_order must be a non-empty list when provided")
-        for idx, bar_index in enumerate(playback_order):
-            if isinstance(bar_index, bool) or not isinstance(bar_index, int):
-                raise _err(f"$.playback_order[{idx}]", "bar index must be an integer")
-            if bar_index < 0:
-                raise _err(f"$.playback_order[{idx}]", "bar index must be >= 0")
-
-    bars = data["bars"]
-    if not isinstance(bars, list) or len(bars) == 0:
-        raise _err("$.bars", "bars must be a non-empty list")
-
-    for bar_idx, bar in enumerate(bars):
-        bpath = f"$.bars[{bar_idx}]"
-        if not isinstance(bar, dict):
-            raise _err(bpath, "bar must be an object")
-
-        if "time_signature" not in bar:
-            raise _err(bpath, "missing required field 'time_signature'")
-        if "tree" not in bar:
-            raise _err(bpath, "missing required field 'tree'")
-
-        ts = bar["time_signature"]
-        if not isinstance(ts, dict):
-            raise _err(f"{bpath}.time_signature", "time_signature must be an object")
-
-        if "numerator" not in ts or "denominator" not in ts:
-            raise _err(f"{bpath}.time_signature", "time_signature requires numerator and denominator")
-
-        numerator = ts["numerator"]
-        denominator = ts["denominator"]
-        if isinstance(numerator, bool) or not isinstance(numerator, int) or numerator <= 0:
-            raise _err(f"{bpath}.time_signature.numerator", "numerator must be a positive integer")
-        if isinstance(denominator, bool) or not isinstance(denominator, int) or denominator <= 0:
-            raise _err(f"{bpath}.time_signature.denominator", "denominator must be a positive integer")
-        if not _is_power_of_two(denominator):
-            raise _err(f"{bpath}.time_signature.denominator", "denominator should be a power of two")
-
-        _validate_tree_node(bar["tree"], f"{bpath}.tree")
-
-    if playback_order is not None:
-        for idx, bar_index in enumerate(playback_order):
-            if bar_index >= len(bars):
-                raise _err(
-                    f"$.playback_order[{idx}]",
-                    f"bar index {bar_index} out of range for {len(bars)} bars",
-                )
+    choke_groups = samples.get("choke_groups", {})
+    if not isinstance(choke_groups, dict):
+        raise _err("$.samples.choke_groups", "choke_groups must be an object mapping slot ids to choke group ids")
+    for raw_slot, raw_group in choke_groups.items():
+        slot = _validate_slot_id(raw_slot, "$.samples.choke_groups")
+        if isinstance(raw_group, bool) or not isinstance(raw_group, int):
+            raise _err(f"$.samples.choke_groups['{slot}']", "choke group must be a positive integer")
+        if raw_group <= 0:
+            raise _err(f"$.samples.choke_groups['{slot}']", "choke group must be >= 1")

@@ -28,7 +28,7 @@ def _load_samples_from_mapping(library: SampleLibrary, project: LoadedPatternPro
 
 
 def _print_pattern_debug(pattern: Pattern, bpm: float, name: str) -> None:
-    playback_order = pattern.resolved_playback_order()
+    playback_order = list(range(len(pattern.bars)))
     print("\nPattern Info:")
     print(f"  name: {name}")
     print(f"  bpm: {bpm}")

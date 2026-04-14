@@ -25,6 +25,7 @@ from engine.event_value_ops import (
     initialize_bar_grid,
 )
 from engine.pattern import Pattern, create_blank_bar, create_blank_pattern
+from engine.project import Project
 from engine.power_tools import (
     LeafEventValue,
     apply_subtree_template,
@@ -1252,11 +1253,15 @@ class SequencerTUI(App[None]):
 
     def _save_to_path(self, path: Path) -> None:
         try:
+            project = Project(
+                patterns=[self.pattern.clone()],
+                current_pattern_index=0,
+                arrangement=[0],
+                bpm=self.bpm,
+            )
             saved_path = save_pattern_project_to_json(
                 path,
-                pattern_name=self.pattern_name,
-                bpm=self.bpm,
-                pattern=self.pattern,
+                project=project,
                 sample_folder=self.sample_folder,
                 sample_library=self.sample_library,
             )
@@ -1313,7 +1318,7 @@ class SequencerTUI(App[None]):
 
     def action_play_bar(self) -> None:
         bar = self.pattern.bars[self.current_bar_index]
-        self._render_and_play_pattern(Pattern(bars=[bar]), f"Played bar {self.current_bar_index}")
+        self._render_and_play_pattern(Pattern(name=self.pattern.name, bars=[bar]), f"Played bar {self.current_bar_index}")
 
     def action_toggle_realtime_bar_playback(self) -> None:
         if self.realtime_looper.is_playing and self.realtime_looper.mode == "bar":

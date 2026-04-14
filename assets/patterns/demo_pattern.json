@@ -1,50 +1,120 @@
 {
-  "name": "Multi Bar Demo",
-  "bpm": 120,
-  "sample_folder": "../samples",
-  "sample_slots": {
-    "0": "kick.wav",
-    "1": "snare.wav",
-    "2": "hat_closed.wav",
-    "3": "hat_open.wav"
+  "schema_version": 1,
+  "project": {
+    "patterns": [
+      {
+        "name": "Multi Bar Demo",
+        "bars": [
+          {
+            "time_signature": {
+              "numerator": 4,
+              "denominator": 4
+            },
+            "tree": {
+              "split": 4,
+              "children": [
+                {
+                  "velocity": 1.0,
+                  "pitch_offset": 0,
+                  "sample_slot": 0
+                },
+                {
+                  "velocity": 0.7,
+                  "pitch_offset": 0,
+                  "sample_slot": 2
+                },
+                {
+                  "velocity": 0.9,
+                  "pitch_offset": -2,
+                  "sample_slot": 1
+                },
+                {
+                  "velocity": 0.7,
+                  "pitch_offset": 0,
+                  "sample_slot": 2
+                }
+              ]
+            }
+          },
+          {
+            "time_signature": {
+              "numerator": 3,
+              "denominator": 4
+            },
+            "tree": {
+              "split": 3,
+              "children": [
+                {
+                  "velocity": 0.95,
+                  "pitch_offset": 0,
+                  "sample_slot": 0
+                },
+                {
+                  "velocity": 0.6,
+                  "pitch_offset": 0,
+                  "sample_slot": 2
+                },
+                {
+                  "velocity": 0.85,
+                  "pitch_offset": 3,
+                  "sample_slot": 1
+                }
+              ]
+            }
+          },
+          {
+            "time_signature": {
+              "numerator": 5,
+              "denominator": 8
+            },
+            "tree": {
+              "split": 5,
+              "children": [
+                {
+                  "velocity": 0.5,
+                  "pitch_offset": 0,
+                  "sample_slot": 2
+                },
+                {
+                  "velocity": 0.5,
+                  "pitch_offset": 0,
+                  "sample_slot": 2
+                },
+                {
+                  "velocity": 0.8,
+                  "pitch_offset": 0,
+                  "sample_slot": 0
+                },
+                {
+                  "velocity": 0.5,
+                  "pitch_offset": 0,
+                  "sample_slot": 2
+                },
+                {
+                  "velocity": 0.85,
+                  "pitch_offset": 0,
+                  "sample_slot": 1
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "current_pattern_index": 0,
+    "arrangement": [
+      0
+    ],
+    "bpm": 120.0
   },
-  "playback_order": [0, 1, 0, 2],
-  "bars": [
-    {
-      "time_signature": { "numerator": 4, "denominator": 4 },
-      "tree": {
-        "split": 4,
-        "children": [
-          { "sample_slot": 0, "velocity": 1.0 },
-          { "sample_slot": 2, "velocity": 0.70 },
-          { "sample_slot": 1, "velocity": 0.90, "pitch_offset": -2 },
-          { "sample_slot": 2, "velocity": 0.70 }
-        ]
-      }
+  "samples": {
+    "sample_folder": "../samples",
+    "slot_files": {
+      "0": "kick.wav",
+      "1": "snare.wav",
+      "2": "hat_closed.wav",
+      "3": "hat_open.wav"
     },
-    {
-      "time_signature": { "numerator": 3, "denominator": 4 },
-      "tree": {
-        "split": 3,
-        "children": [
-          { "sample_slot": 0, "velocity": 0.95 },
-          { "sample_slot": 2, "velocity": 0.60 },
-          { "sample_slot": 1, "velocity": 0.85, "pitch_offset": 3 }
-        ]
-      }
-    },
-    {
-      "time_signature": { "numerator": 5, "denominator": 8 },
-      "tree": {
-        "split": 5,
-        "children": [
-          { "sample_slot": 2, "velocity": 0.50 },
-          { "sample_slot": 2, "velocity": 0.50 },
-          { "sample_slot": 0, "velocity": 0.80 },
-          { "sample_slot": 2, "velocity": 0.50 },
-          { "sample_slot": 1, "velocity": 0.85 }
-        ]
-      }
-    }
-  ]
+    "choke_groups": {}
+  }
 }

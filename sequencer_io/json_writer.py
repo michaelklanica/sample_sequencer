@@ -29,10 +29,13 @@ def save_pattern_project_to_json(
     output.parent.mkdir(parents=True, exist_ok=True)
 
     data = {
-        "sample_folder": sample_folder.resolve().as_posix(),
-        "sample_slots": _serialize_sample_slots(sample_library),
-        "slot_choke_groups": sample_library.serialized_choke_groups(),
+        "schema_version": 1,
         "project": serialize_project(project),
+        "samples": {
+            "sample_folder": sample_folder.resolve().as_posix(),
+            "slot_files": _serialize_sample_slots(sample_library),
+            "choke_groups": sample_library.serialized_choke_groups(),
+        },
     }
 
     output.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")

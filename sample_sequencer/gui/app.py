@@ -74,10 +74,13 @@ class SequencerGuiApp:
         w.pattern_panel.createClicked.connect(self._create_pattern)
         w.pattern_panel.renameClicked.connect(self._rename_pattern)
         w.pattern_panel.deleteClicked.connect(self._delete_pattern)
-        w.arrangement_panel.addClicked.connect(self._arrangement_add_step)
-        w.arrangement_panel.removeClicked.connect(self._arrangement_remove_step)
-        w.arrangement_panel.moveUpClicked.connect(self._arrangement_move_up)
-        w.arrangement_panel.moveDownClicked.connect(self._arrangement_move_down)
+        w.arrangement_panel.appendCurrentClicked.connect(self.append_current_pattern_to_arrangement)
+        w.arrangement_panel.insertCurrentClicked.connect(self.insert_current_pattern_in_arrangement)
+        w.arrangement_panel.duplicateClicked.connect(self.duplicate_selected_arrangement_step)
+        w.arrangement_panel.removeClicked.connect(self.delete_selected_arrangement_step)
+        w.arrangement_panel.moveUpClicked.connect(self.move_selected_arrangement_step_up)
+        w.arrangement_panel.moveDownClicked.connect(self.move_selected_arrangement_step_down)
+        w.arrangement_panel.jumpToPatternRequested.connect(self._jump_to_arrangement_pattern)
         w.bar_list_panel.barSelected.connect(self.set_current_bar)
         w.tree_panel.nodeSelected.connect(self._on_widget_selected_node)
         w.timeline_widget.blockSelected.connect(self._on_widget_selected_node)
@@ -234,8 +237,13 @@ class SequencerGuiApp:
     def refresh_ui(self) -> None:
         self._ensure_valid_current_indices()
         names = [pattern.name for pattern in self.project.patterns]
+        selected_arrangement_index = self.window.arrangement_panel.selected_row()
         self.window.pattern_panel.set_patterns(names, self.project.current_pattern_index)
-        self.window.arrangement_panel.set_arrangement(self.project.arrangement, names)
+        self.window.arrangement_panel.set_arrangement(
+            self.project.arrangement,
+            names,
+            selected_index=selected_arrangement_index,
+        )
         self.window.bar_list_panel.set_pattern(self.project.current_pattern, self.current_bar_index)
         self.window.timeline_widget.set_sample_library(self.sample_library)
         self.window.slot_panel.set_library(self.sample_library)
@@ -783,7 +791,11 @@ class SequencerGuiApp:
 
         names = [pattern.name for pattern in self.project.patterns]
         self.window.pattern_panel.set_patterns(names, self.project.current_pattern_index)
-        self.window.arrangement_panel.set_arrangement(self.project.arrangement, names)
+        self.window.arrangement_panel.set_arrangement(
+            self.project.arrangement,
+            names,
+            selected_index=self.window.arrangement_panel.selected_row(),
+        )
         self.window.bar_list_panel.set_pattern(self.project.current_pattern, self.current_bar_index)
         self.window.tree_panel.set_bar(self.project.current_pattern.bars[self.current_bar_index], selected_path=None)
         self.window.timeline_widget.set_bar(self.project.current_pattern.bars[self.current_bar_index])
@@ -832,35 +844,82 @@ class SequencerGuiApp:
         self.project.current_pattern_index = max(0, next_index)
         self.set_current_pattern_index(self.project.current_pattern_index, mark_dirty=True)
 
-    def _arrangement_add_step(self) -> None:
-        self.begin_mutating_action("Arrangement add step")
+    def _stop_realtime_for_arrangement_mutation(self) -> None:
+        if self.realtime_looper.is_playing:
+            self.realtime_looper.stop(reason="arrangement changed")
+            self._set_ui_status("Stopped realtime playback because arrangement changed.")
+
+    def append_current_pattern_to_arrangement(self) -> None:
+        self._stop_realtime_for_arrangement_mutation()
+        self.begin_mutating_action("Arrangement append current pattern")
         self.project.arrangement.append(self.project.current_pattern_index)
         self._is_dirty = True
         self.refresh_ui()
+        self.window.arrangement_panel.set_selected_row(len(self.project.arrangement) - 1)
 
-    def _arrangement_remove_step(self, index: int) -> None:
-        if len(self.project.arrangement) <= 1 or index < 0 or index >= len(self.project.arrangement):
+    def insert_current_pattern_in_arrangement(self) -> None:
+        selected_index = self.window.arrangement_panel.selected_row()
+        if selected_index < 0:
+            self.append_current_pattern_to_arrangement()
             return
-        self.begin_mutating_action("Arrangement remove step")
-        del self.project.arrangement[index]
+        insert_at = selected_index + 1
+        self._stop_realtime_for_arrangement_mutation()
+        self.begin_mutating_action("Arrangement insert current pattern")
+        self.project.arrangement.insert(insert_at, self.project.current_pattern_index)
         self._is_dirty = True
         self.refresh_ui()
+        self.window.arrangement_panel.set_selected_row(insert_at)
 
-    def _arrangement_move_up(self, index: int) -> None:
+    def duplicate_selected_arrangement_step(self, index: int) -> None:
+        if index < 0 or index >= len(self.project.arrangement):
+            return
+        duplicated_pattern_index = self.project.arrangement[index]
+        insert_at = index + 1
+        self._stop_realtime_for_arrangement_mutation()
+        self.begin_mutating_action("Arrangement duplicate step")
+        self.project.arrangement.insert(insert_at, duplicated_pattern_index)
+        self._is_dirty = True
+        self.refresh_ui()
+        self.window.arrangement_panel.set_selected_row(insert_at)
+
+    def move_selected_arrangement_step_up(self, index: int) -> None:
         if index <= 0 or index >= len(self.project.arrangement):
             return
-        self.begin_mutating_action("Arrangement move up")
+        self._stop_realtime_for_arrangement_mutation()
+        self.begin_mutating_action("Arrangement move step up")
         self.project.arrangement[index - 1], self.project.arrangement[index] = self.project.arrangement[index], self.project.arrangement[index - 1]
         self._is_dirty = True
         self.refresh_ui()
+        self.window.arrangement_panel.set_selected_row(index - 1)
 
-    def _arrangement_move_down(self, index: int) -> None:
+    def move_selected_arrangement_step_down(self, index: int) -> None:
         if index < 0 or index >= len(self.project.arrangement) - 1:
             return
-        self.begin_mutating_action("Arrangement move down")
+        self._stop_realtime_for_arrangement_mutation()
+        self.begin_mutating_action("Arrangement move step down")
         self.project.arrangement[index], self.project.arrangement[index + 1] = self.project.arrangement[index + 1], self.project.arrangement[index]
         self._is_dirty = True
         self.refresh_ui()
+        self.window.arrangement_panel.set_selected_row(index + 1)
+
+    def delete_selected_arrangement_step(self, index: int) -> None:
+        if index < 0 or index >= len(self.project.arrangement):
+            return
+        if len(self.project.arrangement) <= 1:
+            self._set_ui_status("Arrangement must contain at least one step.")
+            return
+        self._stop_realtime_for_arrangement_mutation()
+        self.begin_mutating_action("Arrangement delete step")
+        del self.project.arrangement[index]
+        self._is_dirty = True
+        self.refresh_ui()
+        self.window.arrangement_panel.set_selected_row(min(index, len(self.project.arrangement) - 1))
+
+    def _jump_to_arrangement_pattern(self, arrangement_index: int) -> None:
+        if arrangement_index < 0 or arrangement_index >= len(self.project.arrangement):
+            return
+        target_pattern_index = self.project.arrangement[arrangement_index]
+        self.set_current_pattern_index(target_pattern_index, mark_dirty=False)
 
     def _apply_edit_policy(self, action_name: str) -> bool:
         classification = classify_edit(action_name)

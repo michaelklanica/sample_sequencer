@@ -26,9 +26,8 @@ class TreePanel(QWidget):
             return
         item = selected[0]
         path = item.data(0, Qt.ItemDataRole.UserRole)
-        node = item.data(0, Qt.ItemDataRole.UserRole + 1)
         if isinstance(path, str):
-            self.nodeSelected.emit(path, node)
+            self.nodeSelected.emit(path, None)
 
     def set_bar(self, bar: Bar, selected_path: str | None) -> None:
         self._items_by_path.clear()
@@ -41,7 +40,6 @@ class TreePanel(QWidget):
                 label += f" | slot={node.sample_slot} vel={node.velocity:.2f} pitch={node.pitch_offset}"
             item = QTreeWidgetItem([label])
             item.setData(0, Qt.ItemDataRole.UserRole, path)
-            item.setData(0, Qt.ItemDataRole.UserRole + 1, node)
             self._items_by_path[path] = item
             parent.addChild(item) if isinstance(parent, QTreeWidgetItem) else parent.addTopLevelItem(item)
             for idx, child in enumerate(node.children):

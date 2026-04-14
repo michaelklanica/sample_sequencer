@@ -141,6 +141,25 @@ class SequencerGuiApp:
                 return resolved_path, node_map[resolved_path]
         return None, None
 
+    def _ensure_valid_current_indices(self) -> None:
+        if not self.project.patterns:
+            raise RuntimeError("Project must contain at least one pattern.")
+        self.project.current_pattern_index = max(0, min(self.project.current_pattern_index, len(self.project.patterns) - 1))
+        pattern = self.project.current_pattern
+        if not pattern.bars:
+            raise RuntimeError("Current pattern must contain at least one bar.")
+        self.current_bar_index = max(0, min(self.current_bar_index, len(pattern.bars) - 1))
+
+    def _selection_belongs_to_current_bar(self) -> bool:
+        if self.selected_node is None or self.selected_node_path is None:
+            return False
+        node_map = self._node_map()
+        return node_map.get(self.selected_node_path) is self.selected_node
+
+    def _stop_realtime_for_pattern_change(self, reason: str) -> None:
+        if self.realtime_looper.is_playing:
+            self.realtime_looper.stop(reason=reason)
+
     def set_current_bar(self, bar_index: int) -> None:
         if bar_index < 0 or bar_index >= len(self.project.current_pattern.bars):
             return
@@ -169,6 +188,7 @@ class SequencerGuiApp:
             self.refresh_selection_views()
 
     def refresh_bar_views(self) -> None:
+        self._ensure_valid_current_indices()
         bar = self.project.current_pattern.bars[self.current_bar_index]
         self.window.bar_list_panel.set_selected_bar(self.current_bar_index)
         self.window.tree_panel.set_bar(bar, self.selected_node_path)
@@ -198,6 +218,9 @@ class SequencerGuiApp:
         return current_path, current_node
 
     def refresh_selection_views(self) -> None:
+        if not self._selection_belongs_to_current_bar():
+            self.selected_node = None
+            self.selected_node_path = None
         self.window.tree_panel.set_selected_path(self.selected_node_path)
         self.window.timeline_widget.set_selected_node(self.selected_node, self.selected_node_path)
         self.window.inspector_panel.set_node(self.current_bar_index, self.selected_node_path, self.selected_node)
@@ -209,6 +232,7 @@ class SequencerGuiApp:
         self._refresh_transport()
 
     def refresh_ui(self) -> None:
+        self._ensure_valid_current_indices()
         names = [pattern.name for pattern in self.project.patterns]
         self.window.pattern_panel.set_patterns(names, self.project.current_pattern_index)
         self.window.arrangement_panel.set_arrangement(self.project.arrangement, names)
@@ -314,10 +338,14 @@ class SequencerGuiApp:
         self._set_ui_status(" ".join(status_parts))
 
     def _on_widget_selected_node(self, path: str, node: RhythmNode | None) -> None:
-        if node is None:
+        if not path:
             self.clear_selection()
             return
-        self.set_selected_node(node=node, path=path)
+        resolved = self._node_map().get(path)
+        if resolved is None:
+            self.clear_selection()
+            return
+        self.set_selected_node(node=resolved, path=path)
 
     def _split_selected(self, parts: int) -> None:
         if self.selected_node_path is None:
@@ -740,24 +768,44 @@ class SequencerGuiApp:
             )
         QMessageBox.information(self.window, "Export", f"Exported to {output}\nMode: {selected_mode}")
 
+    def set_current_pattern_index(self, index: int, *, mark_dirty: bool = False) -> None:
+        if index < 0 or index >= len(self.project.patterns):
+            return
+        if self.project.current_pattern_index == index and not mark_dirty:
+            self._ensure_valid_current_indices()
+            return
+
+        self._stop_realtime_for_pattern_change("pattern changed")
+        self.clear_selection(refresh=False)
+        self.project.set_current_pattern_index(index)
+        self.current_bar_index = 0
+        self._ensure_valid_current_indices()
+
+        names = [pattern.name for pattern in self.project.patterns]
+        self.window.pattern_panel.set_patterns(names, self.project.current_pattern_index)
+        self.window.arrangement_panel.set_arrangement(self.project.arrangement, names)
+        self.window.bar_list_panel.set_pattern(self.project.current_pattern, self.current_bar_index)
+        self.window.tree_panel.set_bar(self.project.current_pattern.bars[self.current_bar_index], selected_path=None)
+        self.window.timeline_widget.set_bar(self.project.current_pattern.bars[self.current_bar_index])
+        self.window.inspector_panel.set_node(self.current_bar_index, None, None)
+        self.window.slot_panel.set_assignment_enabled(False)
+        self.window.slot_panel.set_selected_slot(None)
+        self._refresh_transport()
+
+        if mark_dirty:
+            self._is_dirty = True
+
     def _set_current_pattern(self, index: int) -> None:
         if index < 0 or index >= len(self.project.patterns) or self.project.current_pattern_index == index:
             return
         self.begin_mutating_action("Switch pattern")
-        self.project.current_pattern_index = index
-        self.current_bar_index = 0
-        self.clear_selection(refresh=False)
-        self._is_dirty = True
-        self.refresh_ui()
+        self.set_current_pattern_index(index, mark_dirty=True)
 
     def _create_pattern(self) -> None:
         self.begin_mutating_action("Create pattern")
+        self._stop_realtime_for_pattern_change("pattern created")
         new_index = self.project.add_pattern_duplicate_current()
-        self.project.current_pattern_index = new_index
-        self.current_bar_index = 0
-        self.clear_selection(refresh=False)
-        self._is_dirty = True
-        self.refresh_ui()
+        self.set_current_pattern_index(new_index, mark_dirty=True)
 
     def _rename_pattern(self, index: int) -> None:
         if index < 0 or index >= len(self.project.patterns):
@@ -774,16 +822,15 @@ class SequencerGuiApp:
         if len(self.project.patterns) <= 1 or index < 0 or index >= len(self.project.patterns):
             return
         self.begin_mutating_action("Delete pattern")
+        self._stop_realtime_for_pattern_change("pattern deleted")
         del self.project.patterns[index]
         self.project.arrangement = [i for i in self.project.arrangement if i != index]
         self.project.arrangement = [i - 1 if i > index else i for i in self.project.arrangement]
         if not self.project.arrangement:
             self.project.arrangement = [0]
-        self.project.current_pattern_index = min(self.project.current_pattern_index, len(self.project.patterns) - 1)
-        self.current_bar_index = 0
-        self.clear_selection(refresh=False)
-        self._is_dirty = True
-        self.refresh_ui()
+        next_index = min(self.project.current_pattern_index, len(self.project.patterns) - 1)
+        self.project.current_pattern_index = max(0, next_index)
+        self.set_current_pattern_index(self.project.current_pattern_index, mark_dirty=True)
 
     def _arrangement_add_step(self) -> None:
         self.begin_mutating_action("Arrangement add step")

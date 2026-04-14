@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSignalBlocker, Signal
 from PySide6.QtWidgets import QHBoxLayout, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QWidget
 
 
@@ -31,11 +31,15 @@ class PatternPanel(QWidget):
         self.delete_btn.clicked.connect(self._emit_delete)
 
     def set_patterns(self, names: list[str], current_index: int) -> None:
+        blocker = QSignalBlocker(self.list)
         self.list.clear()
         for name in names:
             self.list.addItem(QListWidgetItem(name))
         if 0 <= current_index < len(names):
             self.list.setCurrentRow(current_index)
+        else:
+            self.list.setCurrentRow(-1)
+        del blocker
 
     def _emit_rename(self) -> None:
         idx = self.list.currentRow()

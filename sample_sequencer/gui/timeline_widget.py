@@ -49,11 +49,13 @@ class TimelineWidget(QWidget):
 
     def set_bar(self, bar: Bar | None) -> None:
         self._bar = bar
+        self._selected_path = None
         self._hovered_node = None
+        self._leaf_hits = []
         self.update()
 
     def set_selected_node(self, node: RhythmNode | None, node_path: str | None = None) -> None:
-        selected_path = node_path if node is not None and node.is_leaf() else None
+        selected_path = node_path if node is not None and node.is_leaf() and self._leaf_path_exists(node_path) else None
         if self._selected_path == selected_path:
             return
         self._selected_path = selected_path
@@ -100,6 +102,11 @@ class TimelineWidget(QWidget):
             x = 8 + (leaf.start_fraction * width)
             w = max(4.0, leaf.duration_fraction * width)
             self._leaf_hits.append(LeafHit(path=path, node=leaf, rect=QRectF(x, top, w, height)))
+
+    def _leaf_path_exists(self, path: str) -> bool:
+        if self._bar is None:
+            return False
+        return any(candidate_path == path for candidate_path, _node in self._iter_leaves(self._bar.root, "0"))
 
     def _short_sample_name(self, slot: int) -> str | None:
         if self._sample_library is None:
